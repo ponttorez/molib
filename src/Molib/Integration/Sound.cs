@@ -318,7 +318,7 @@ public sealed class Sound
             && (IsOn(cursor.WindowPushed, list, popup) || IsOn(cursor.VisualOver, list, popup));
         IInputReceiver? receiver = InteractiveGue.CurrentInputReceiver;
         bool hasFocus = ReferenceEquals(receiver, list) || (popup is not null && ReferenceEquals(receiver, popup));
-        if (isPointer || (hasFocus && Input.IsNavigationActive()))
+        if (isPointer || (hasFocus && NavigationInput.IsActive()))
         {
             Raise(UiSoundKind.Select, list.Visual);
         }

@@ -99,7 +99,7 @@ public sealed class Layers
         _molib.Sound.Raise(UiSoundKind.LayerClosed, layer.Content);
         _open.Remove(layer);
         layer.IsOpen = false;
-        _molib.Input.ClearFocusInside(layer.Root);
+        _molib.Input.Focus.ClearInside(layer.Root);
 
         ShowHideAnimator animator = _molib.ShowHideAnimator;
         ShowHide preset = layer.Options.Animation;
@@ -152,11 +152,11 @@ public sealed class Layers
 
         if (InteractiveGue.CurrentInputReceiver is TextBoxBase field)
         {
-            input.UnfocusTextField(field);
+            input.Focus.UnfocusTextField(field);
             return;
         }
 
-        GraphicalUiElement? topModal = input.TopModal();
+        GraphicalUiElement? topModal = input.Focus.TopModal();
         if (topModal is not null && !_roots.Contains(topModal))
         {
             string name = string.IsNullOrEmpty(topModal.Name) ? topModal.GetType().Name : topModal.Name;
@@ -239,7 +239,7 @@ public sealed class Layers
         root.AddChild(safeContainer);
         _molib.SafeArea.Attach(safeContainer);
 
-        FrameworkElement? focusToReturn = _molib.Input.FocusTarget;
+        FrameworkElement? focusToReturn = _molib.Input.Focus.Target;
         content.RemoveFromRoot();
         content.Visible = false;
         if (options.CenterContent)
@@ -273,7 +273,7 @@ public sealed class Layers
                 CancellationToken.None);
         }
 
-        _molib.Input.FocusLayer(options.InitialFocus, root);
+        _molib.Input.Focus.FocusLayer(options.InitialFocus, root);
         return layer;
     }
 
@@ -300,7 +300,7 @@ public sealed class Layers
         _roots.Remove(layer.Root);
         if (openedCount == _openedCount)
         {
-            _molib.Input.ReturnFocus(layer.FocusToReturn);
+            _molib.Input.Focus.ReturnFocus(layer.FocusToReturn);
         }
 
         layer.Complete(reason);

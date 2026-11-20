@@ -1,12 +1,10 @@
 using System.Collections.Specialized;
-using Gum.Converters;
 using Gum.DataTypes;
 using Gum.Forms.Controls;
 using Gum.GueDeriving;
 using Gum.Input;
 using Gum.Managers;
 using Gum.Wireframe;
-using RenderingLibrary.Graphics;
 using Keys = Gum.Forms.Input.Keys;
 
 namespace Molib.Widgets;
@@ -29,20 +27,19 @@ namespace Molib.Widgets;
 /// kept by data index and drawn with the <c>Selected</c> state; the rows never take the focus, because a focused
 /// Gum element scrolls its scroll viewers to itself and the list moves its rows itself.
 /// </para>
-/// <para>ADR: widgets/virtual-list.</para>
+/// <para>
+/// This class keeps the items, the selection, keyboard and gamepad navigation and the reaction to collection
+/// changes; <see cref="VirtualRows"/> keeps which rows exist, the pool of visuals and the selected look of a row.
+/// ADR: widgets/virtual-list.
+/// </para>
 /// </remarks>
 public sealed class VirtualList<T> : ScrollViewer, IVirtualList
 {
     private const float DefaultItemHeight = 40;
 
-    private readonly Dictionary<int, Row> _bound = [];
-    private readonly Stack<Row> _pool = new();
-    private readonly List<int> _leaving = [];
+    private readonly VirtualRows _rows;
     private INotifyCollectionChanged? _observed;
     private int _selectedIndex = -1;
-    private int _boundStart;
-    private int _boundEnd;
-    private bool _isBinding;
     private bool _isRebuilding;
     private EventHandler? _selectedByUser;
 
@@ -54,6 +51,7 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
         InnerPanel.ChildrenLayout = ChildrenLayout.Regular;
         InnerPanel.HeightUnits = DimensionUnitType.Absolute;
         InnerPanel.Height = 0;
+        _rows = new VirtualRows(InnerPanel, CreateRowVisual, Bind, HandleRowSelected, HandleRowClicked);
         ScrollChanged += HandleScrollChanged;
         ClipContainer.SizeChanged += HandleViewportSizeChanged;
     }
@@ -474,34 +472,21 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
             return;
         }
 
-        if (_bound.TryGetValue(_selectedIndex, out Row? previous))
+        if (_rows.TryGet(_selectedIndex, out VirtualRow? previous))
         {
-            SetRowSelected(previous, false);
+            _rows.SetSelected(previous, false);
         }
 
         _selectedIndex = index;
-        if (_bound.TryGetValue(index, out Row? row))
+        if (_rows.TryGet(index, out VirtualRow? row))
         {
-            SetRowSelected(row, true);
+            _rows.SetSelected(row, true);
         }
 
         SelectionChanged?.Invoke(this, EventArgs.Empty);
         if (isByUser)
         {
             _selectedByUser?.Invoke(this, EventArgs.Empty);
-        }
-    }
-
-    private void SetRowSelected(Row row, bool isSelected)
-    {
-        _isBinding = true;
-        try
-        {
-            row.Item.IsSelected = isSelected;
-        }
-        finally
-        {
-            _isBinding = false;
         }
     }
 
@@ -575,7 +560,7 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
             _selectedIndex = selected;
         }
 
-        ReleaseAll();
+        _rows.ReleaseAll();
         UpdateRange();
     }
 
@@ -609,13 +594,13 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
             _isRebuilding = false;
         }
 
-        ReleaseAll();
+        _rows.ReleaseAll();
         UpdateRange();
     }
 
     /// <remarks>
-    /// The range is the rows in view plus one screen of rows above and below, so a scroll by less than a screen
-    /// reuses visuals that are already filled. ADR: widgets/virtual-list — Structure.
+    /// Rows exist for the rows in view plus one screen of rows above and below. ADR: widgets/virtual-list —
+    /// Structure.
     /// </remarks>
     private void UpdateRange()
     {
@@ -624,105 +609,37 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
             return;
         }
 
-        int count = Count;
-        float viewport = ClipContainer.AbsoluteHeight;
-        int start = 0;
-        int end = 0;
-        if (count > 0 && viewport > 0)
-        {
-            int screenRows = (int)MathF.Ceiling(viewport / ItemHeight);
-            int firstRow = (int)((float)VerticalScrollBarValue / ItemHeight);
-            start = Math.Max(0, firstRow - screenRows) * Columns;
-            end = Math.Min(count, Math.Min(RowCount, firstRow + (2 * screenRows) + 1) * Columns);
-        }
-
-        if (start == _boundStart && end == _boundEnd)
-        {
-            return;
-        }
-
-        _leaving.Clear();
-        foreach (KeyValuePair<int, Row> pair in _bound)
-        {
-            if (pair.Key < start || pair.Key >= end)
-            {
-                _leaving.Add(pair.Key);
-            }
-        }
-
-        for (int i = 0; i < _leaving.Count; i++)
-        {
-            int index = _leaving[i];
-            Release(_bound[index]);
-            _bound.Remove(index);
-        }
-
-        for (int i = start; i < end; i++)
-        {
-            if (!_bound.ContainsKey(i))
-            {
-                Row row = Acquire();
-                Bind(row, i);
-                _bound.Add(i, row);
-            }
-        }
-
-        _boundStart = start;
-        _boundEnd = end;
+        (int start, int end) = VirtualRows.RangeFor(
+            Count,
+            Columns,
+            ItemHeight,
+            ClipContainer.AbsoluteHeight,
+            (float)VerticalScrollBarValue);
+        _rows.Show(start, end);
     }
 
     private void DiscardRows()
     {
-        ReleaseAll();
-        while (_pool.TryPop(out Row? row))
-        {
-            row.Item.Visual.RemoveFromRoot();
-        }
-
+        _rows.Discard();
         Rebuild();
     }
 
-    private void ReleaseAll()
+    /// <remarks>
+    /// A visual with a <see cref="ListBoxItem"/> keeps it. A default row keeps the placeholder text of the Gum visual
+    /// as plain text, so a language change does not bring it back. ADR: integration/localization — What Gum does.
+    /// </remarks>
+    private InteractiveGue CreateRowVisual()
     {
-        foreach (KeyValuePair<int, Row> pair in _bound)
-        {
-            Release(pair.Value);
-        }
-
-        _bound.Clear();
-        _boundStart = 0;
-        _boundEnd = 0;
-    }
-
-    private Row Acquire()
-    {
-        if (_pool.TryPop(out Row? pooled))
-        {
-            pooled.Item.Visual.Visible = true;
-            return pooled;
-        }
-
         InteractiveGue visual = CreateVisual?.Invoke() ?? new ListBoxItem().Visual;
-        ListBoxItem item = visual.FormsControlAsObject as ListBoxItem ?? new ListBoxItem(visual);
-        var row = new Row(item);
-        item.Selected += (_, _) => HandleRowSelected(row);
-        item.Clicked += (_, _) => HandleRowClicked(row);
         if (BindVisual is null && visual.GetGraphicalUiElementByName("TextInstance") is TextRuntime text)
         {
             text.SetTextNoTranslate(text.Text);
         }
 
-        visual.XUnits = GeneralUnitType.Percentage;
-        visual.XOrigin = HorizontalAlignment.Left;
-        visual.YUnits = GeneralUnitType.PixelsFromSmall;
-        visual.YOrigin = VerticalAlignment.Top;
-        visual.WidthUnits = DimensionUnitType.PercentageOfParent;
-        visual.HeightUnits = DimensionUnitType.Absolute;
-        InnerPanel.AddChild(visual);
-        return row;
+        return visual;
     }
 
-    private void Bind(Row row, int index)
+    private void Bind(VirtualRow row, int index)
     {
         if (Items is not { } items)
         {
@@ -746,16 +663,7 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
             row.Item.UpdateToObject(item);
         }
 
-        SetRowSelected(row, index == _selectedIndex);
-    }
-
-    private void Release(Row row)
-    {
-        SetRowSelected(row, false);
-        row.Item.IsHighlighted = false;
-        row.Item.Visual.Visible = false;
-        row.Index = -1;
-        _pool.Push(row);
+        _rows.SetSelected(row, index == _selectedIndex);
     }
 
     /// <remarks>
@@ -763,9 +671,9 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
     /// acts, so a press puts the row back as it was. A finger selects on the release in Gum already.
     /// ADR: widgets/virtual-list — Mouse and touch.
     /// </remarks>
-    private void HandleRowSelected(Row row)
+    private void HandleRowSelected(VirtualRow row)
     {
-        if (_isBinding || row.Index < 0)
+        if (_rows.IsBinding || row.Index < 0)
         {
             return;
         }
@@ -773,7 +681,7 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
         ICursor cursor = MainCursor;
         if (cursor.PrimaryPush && cursor.LastInputDevice == InputDevice.Mouse)
         {
-            SetRowSelected(row, row.Index == _selectedIndex);
+            _rows.SetSelected(row, row.Index == _selectedIndex);
             return;
         }
 
@@ -784,7 +692,7 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
     /// A tap that turned into a touch scroll is not an activation: Gum still raises the click when the finger is
     /// lifted over the same row.
     /// </remarks>
-    private void HandleRowClicked(Row row)
+    private void HandleRowClicked(VirtualRow row)
     {
         ICursor cursor = MainCursor;
         if (row.Index < 0 || (cursor.LastInputDevice == InputDevice.TouchScreen && !cursor.PrimaryClickNoSlide))
@@ -804,13 +712,4 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
         Right,
     }
 
-    /// <summary>
-    /// A row visual with its <see cref="ListBoxItem"/> and the index of the item it shows, -1 while pooled.
-    /// </summary>
-    private sealed class Row(ListBoxItem item)
-    {
-        public ListBoxItem Item { get; } = item;
-
-        public int Index { get; set; } = -1;
-    }
 }

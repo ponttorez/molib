@@ -1,16 +1,11 @@
-using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Gum;
-using Gum.DataTypes;
 using Gum.Forms.Controls;
-using Gum.GueDeriving;
 using Gum.Input;
 using Gum.Wireframe;
 using Microsoft.Xna.Framework;
 using Molib.Integration;
-using Molib.Motion;
-using RenderingLibrary.Graphics;
 using Keys = Gum.Forms.Input.Keys;
 
 namespace Molib.Interaction;
@@ -29,6 +24,13 @@ namespace Molib.Interaction;
 /// <para>
 /// Registrations are kept in a weak table: an element the game drops goes away together with its registration, and
 /// an element out of the tree is never under the pointer. ADR: interaction/drag-drop — Decision, API.
+/// </para>
+/// <para>
+/// This class runs the gesture: registrations, the phases of a drag, the input of the pointer and of the pick
+/// button, and the events. Two parts keep their own invariants: <see cref="DropTargets"/> lists the targets
+/// reachable when a pointer drag starts, finds the one under the pointer and scrolls viewers at their edge, and
+/// <see cref="DragPreview"/> owns what the player sees — the copy in <c>ModalRoot</c>, the dimmed source and the
+/// flight — and gives the source its look back.
 /// </para>
 /// </remarks>
 public sealed class DragDrop
@@ -54,18 +56,12 @@ public sealed class DragDrop
     public const string RejectState = "Reject";
 
     private const float HoldToDragSeconds = 0.5f;
-    private const int CopyAlpha = 200;
-    private const int DimmedAlpha = 100;
-    private const float EdgeBand = 32;
-    private const float EdgeSpeed = 600;
 
     private readonly MolibService _molib;
     private readonly Game _game;
-    private readonly GumService _gum;
     private readonly ConditionalWeakTable<GraphicalUiElement, DragRegistration> _registrations = [];
-    private readonly List<DragRegistration> _targets = [];
-    private readonly List<ScrollViewer> _scrollAreas = [];
-    private readonly DragFlight _flight;
+    private readonly DropTargets _dropTargets;
+    private readonly DragPreview _preview;
     private Phase _phase;
     private DragRegistration? _source;
     private object? _data;
@@ -73,24 +69,16 @@ public sealed class DragDrop
     private bool _targetAccepts;
     private float _pressX;
     private float _pressY;
-    private float _grabX;
-    private float _grabY;
     private float _holdSeconds;
     private bool _isTouch;
     private ScrollViewer? _sourceScroll;
-    private GraphicalUiElement? _modal;
-    private ContainerRuntime? _host;
-    private ContainerRuntime? _copy;
-    private InvisibleRenderable? _dimmed;
-    private bool _dimmedWasRenderTarget;
-    private int _dimmedAlpha;
 
     internal DragDrop(MolibService molib, Game game, GumService gum)
     {
         _molib = molib;
         _game = game;
-        _gum = gum;
-        _flight = new DragFlight(EndFlight);
+        _dropTargets = new DropTargets(gum);
+        _preview = new DragPreview(molib.Motion, gum);
     }
 
     /// <summary>
@@ -223,7 +211,7 @@ public sealed class DragDrop
             SetTarget(null);
         }
 
-        _targets.Remove(registration);
+        _dropTargets.Remove(registration);
         _registrations.Remove(visual);
     }
 
@@ -278,7 +266,7 @@ public sealed class DragDrop
             return true;
         }
 
-        return _host is not null;
+        return _preview.IsShown;
     }
 
     /// <summary>
@@ -332,50 +320,16 @@ public sealed class DragDrop
         if (IsDragging)
         {
             SetTarget(null);
-            Undim();
+            _preview.Undim();
         }
 
         _phase = Phase.Idle;
         _source = null;
         _sourceScroll = null;
         _data = null;
-        _modal = null;
-        _targets.Clear();
-        _scrollAreas.Clear();
-        _molib.Motion.Stop(_flight.Progress);
-        EndFlight();
+        _dropTargets.Clear();
+        _preview.FinishNow();
         _registrations.Clear();
-    }
-
-    /// <summary>
-    /// Copies <paramref name="element"/> with all its children.
-    /// </summary>
-    /// <remarks>
-    /// Checked against Gum 2026.11.2.1: <c>GraphicalUiElement.Clone()</c> copies one element without its children
-    /// (a cloned button visual has none), so the tree is copied element by element. The copy is visual only: Gum
-    /// drops the Forms control and the event handlers of a clone.
-    /// ADR: interaction/drag-drop — Pointer: mouse and touch.
-    /// </remarks>
-    private static GraphicalUiElement CopyTree(GraphicalUiElement element)
-    {
-        GraphicalUiElement copy = element.Clone();
-        ObservableCollection<GraphicalUiElement> children = element.Children;
-        for (int i = 0; i < children.Count; i++)
-        {
-            copy.AddChild(CopyTree(children[i]));
-        }
-
-        return copy;
-    }
-
-    private static float EdgeSpeedFor(float fromStart, float fromEnd)
-    {
-        if (fromStart < EdgeBand)
-        {
-            return -EdgeSpeed * (1 - (fromStart / EdgeBand));
-        }
-
-        return fromEnd < EdgeBand ? EdgeSpeed * (1 - (fromEnd / EdgeBand)) : 0;
     }
 
     private static bool IsAlongScroll(ScrollViewer viewer, float deltaX, float deltaY) =>
@@ -479,205 +433,38 @@ public sealed class DragDrop
             return;
         }
 
-        FinishFlightNow();
+        _preview.FinishNow();
         _data = data;
-        _modal = _molib.Input.TopModal();
-        CollectTargets(source);
+        _dropTargets.Collect(_registrations, source, _molib.Input.Focus.TopModal());
         _molib.Scrolling.StopTracking();
 
         GraphicalUiElement visual = source.Visual;
-        _grabX = _pressX - visual.AbsoluteLeft;
-        _grabY = _pressY - visual.AbsoluteTop;
-        _host = new ContainerRuntime { HasEvents = false, ExposeChildrenEvents = false };
-        _host.Dock(Dock.Fill);
-        _copy = CreateCopy(source, data);
-        _host.AddChild(_copy);
-        _gum.ModalRoot.AddChild(_host);
-        MoveCopy(cursor.XRespectingGumZoomAndBounds(), cursor.YRespectingGumZoomAndBounds());
-        Dim(visual, source.Options.HideSourceWhileDragging);
+        _preview.Show(source, data, _pressX, _pressY);
+        _preview.MoveTo(cursor.XRespectingGumZoomAndBounds(), cursor.YRespectingGumZoomAndBounds());
+        _preview.Dim(visual, source.Options.HideSourceWhileDragging);
         _phase = Phase.Pointer;
         _molib.Sound.Raise(UiSoundKind.DragStarted, visual);
         Started?.Invoke(this, new DragEventArgs(data, visual, target: null));
-    }
-
-    private static ContainerRuntime CreateCopy(DragRegistration source, object data)
-    {
-        GraphicalUiElement visual = source.Visual;
-        var box = new ContainerRuntime
-        {
-            HasEvents = false,
-            WidthUnits = DimensionUnitType.Absolute,
-            Width = visual.AbsoluteWidth,
-            HeightUnits = DimensionUnitType.Absolute,
-            Height = visual.AbsoluteHeight,
-        };
-        GraphicalUiElement content;
-        if (source.Options.Preview is { } preview)
-        {
-            content = preview(data);
-        }
-        else
-        {
-            content = CopyTree(visual);
-            content.XUnits = Gum.Converters.GeneralUnitType.PixelsFromSmall;
-            content.YUnits = Gum.Converters.GeneralUnitType.PixelsFromSmall;
-            content.XOrigin = HorizontalAlignment.Left;
-            content.YOrigin = VerticalAlignment.Top;
-            content.X = 0;
-            content.Y = 0;
-            content.WidthUnits = DimensionUnitType.Absolute;
-            content.Width = visual.AbsoluteWidth;
-            content.HeightUnits = DimensionUnitType.Absolute;
-            content.Height = visual.AbsoluteHeight;
-        }
-
-        box.AddChild(content);
-        if (box.RenderableComponent is InvisibleRenderable renderable)
-        {
-            renderable.IsRenderTarget = true;
-            renderable.Alpha = CopyAlpha;
-        }
-
-        return box;
     }
 
     private void UpdatePointer(ICursor cursor, float deltaSeconds)
     {
         float x = cursor.XRespectingGumZoomAndBounds();
         float y = cursor.YRespectingGumZoomAndBounds();
-        SetTarget(HitTest(x, y));
+        if (_source is not { } source)
+        {
+            return;
+        }
+
+        SetTarget(_dropTargets.HitTest(x, y, source));
         if (!cursor.PrimaryDown)
         {
             Finish(drop: _target is not null && _targetAccepts);
             return;
         }
 
-        MoveCopy(x, y);
-        ScrollAtEdges(x, y, deltaSeconds);
-    }
-
-    private void MoveCopy(float x, float y)
-    {
-        if (_copy is not null)
-        {
-            _copy.X = x - _grabX;
-            _copy.Y = y - _grabY;
-        }
-    }
-
-    /// <summary>
-    /// The registered target drawn under the canvas point; the innermost one when targets are nested.
-    /// </summary>
-    /// <remarks>
-    /// While the copy is on top of <c>ModalRoot</c> Gum reports nothing under the cursor, so molib tests the targets
-    /// itself: visible, inside the bounds and inside every clipping ancestor, and inside the modal window that was on
-    /// top when the drag started, as Gum's own input would be. ADR: interaction/drag-drop — Pointer: mouse and touch.
-    /// </remarks>
-    private DragRegistration? HitTest(float x, float y)
-    {
-        DragRegistration? best = null;
-        for (int i = 0; i < _targets.Count; i++)
-        {
-            DragRegistration candidate = _targets[i];
-            if (ReferenceEquals(candidate, _source) || !VisualTree.ShowsAt(candidate.Visual, x, y)
-                || !IsReachable(candidate.Visual))
-            {
-                continue;
-            }
-
-            if (best is null || VisualTree.IsInside(candidate.Visual, best.Visual))
-            {
-                best = candidate;
-            }
-        }
-
-        return best;
-    }
-
-    private bool IsReachable(GraphicalUiElement element)
-    {
-        if (_modal is not null)
-        {
-            return VisualTree.IsInside(element, _modal);
-        }
-
-        GraphicalUiElement top = element;
-        while (top.Parent is not null)
-        {
-            top = top.Parent;
-        }
-
-        return ReferenceEquals(top, _gum.Root) || ReferenceEquals(top, _gum.PopupRoot);
-    }
-
-    /// <remarks>
-    /// The registrations are listed once per drag; the list holds the targets reachable then and the scroll viewers
-    /// around them and around the source, which scroll when the pointer rests at their edge.
-    /// ADR: interaction/drag-drop — Scrolling during a drag.
-    /// </remarks>
-    private void CollectTargets(DragRegistration source)
-    {
-        _targets.Clear();
-        _scrollAreas.Clear();
-        foreach (KeyValuePair<GraphicalUiElement, DragRegistration> pair in _registrations)
-        {
-            DragRegistration registration = pair.Value;
-            if (registration.CanDrop is null || (_modal is not null && !VisualTree.IsInside(pair.Key, _modal)))
-            {
-                continue;
-            }
-
-            _targets.Add(registration);
-            AddScrollAreas(pair.Key);
-        }
-
-        AddScrollAreas(source.Visual);
-    }
-
-    private void AddScrollAreas(GraphicalUiElement element)
-    {
-        for (ScrollViewer? viewer = VisualTree.FindScrollViewer(element);
-            viewer is not null;
-            viewer = VisualTree.FindScrollViewer(viewer.Visual))
-        {
-            if (!_scrollAreas.Contains(viewer))
-            {
-                _scrollAreas.Add(viewer);
-            }
-        }
-    }
-
-    /// <remarks>
-    /// The speed grows from 0 at the inner side of a 32-unit band to 600 units/s at the edge.
-    /// ADR: interaction/drag-drop — Scrolling during a drag.
-    /// </remarks>
-    private void ScrollAtEdges(float x, float y, float deltaSeconds)
-    {
-        for (int i = 0; i < _scrollAreas.Count; i++)
-        {
-            ScrollViewer viewer = _scrollAreas[i];
-            GraphicalUiElement clip = viewer.ClipContainer;
-            if (!clip.AbsoluteVisible || !VisualTree.Contains(clip, x, y))
-            {
-                continue;
-            }
-
-            float vertical = viewer.VerticalScrollBarMaximum > 0
-                ? EdgeSpeedFor(y - clip.AbsoluteTop, clip.AbsoluteBottom - y)
-                : 0;
-            if (vertical != 0)
-            {
-                viewer.VerticalScrollBarValue += vertical * deltaSeconds;
-            }
-
-            float horizontal = viewer.HorizontalScrollBarMaximum > 0
-                ? EdgeSpeedFor(x - clip.AbsoluteLeft, clip.AbsoluteRight - x)
-                : 0;
-            if (horizontal != 0)
-            {
-                viewer.HorizontalScrollBarValue += horizontal * deltaSeconds;
-            }
-        }
+        _preview.MoveTo(x, y);
+        _dropTargets.ScrollAtEdges(x, y, deltaSeconds);
     }
 
     /// <remarks>
@@ -732,18 +519,13 @@ public sealed class DragDrop
         object data = _data;
         DragRegistration? target = drop ? _target : null;
         SetTarget(null);
-        Undim();
+        _preview.Undim();
         _phase = Phase.Idle;
         _source = null;
         _sourceScroll = null;
         _data = null;
-        _targets.Clear();
-        _scrollAreas.Clear();
-
-        if (_copy is not null)
-        {
-            StartFlight(_copy, target?.Visual ?? source.Visual, centered: target is not null);
-        }
+        _dropTargets.Clear();
+        _preview.FlyTo(target?.Visual ?? source.Visual, centered: target is not null);
 
         if (target is not null)
         {
@@ -755,67 +537,6 @@ public sealed class DragDrop
         {
             _molib.Sound.Raise(UiSoundKind.DragCancelled, source.Visual);
             Cancelled?.Invoke(this, new DragEventArgs(data, source.Visual, target: null));
-        }
-    }
-
-    private void StartFlight(ContainerRuntime copy, GraphicalUiElement destination, bool centered)
-    {
-        float toX = destination.AbsoluteLeft;
-        float toY = destination.AbsoluteTop;
-        if (centered)
-        {
-            toX += (destination.AbsoluteWidth - copy.Width) / 2;
-            toY += (destination.AbsoluteHeight - copy.Height) / 2;
-        }
-
-        _flight.Begin(copy, toX, toY);
-        if (_molib.Motion.IsInstant)
-        {
-            EndFlight();
-        }
-        else
-        {
-            _molib.Motion.Start(_flight.Progress, MotionPreset.Smooth);
-        }
-    }
-
-    private void FinishFlightNow()
-    {
-        if (_host is not null)
-        {
-            _molib.Motion.Stop(_flight.Progress);
-            EndFlight();
-        }
-    }
-
-    private void EndFlight()
-    {
-        _host?.RemoveFromRoot();
-        _host = null;
-        _copy = null;
-    }
-
-    private void Dim(GraphicalUiElement visual, bool hide)
-    {
-        if (visual.RenderableComponent is not InvisibleRenderable renderable)
-        {
-            return;
-        }
-
-        _dimmed = renderable;
-        _dimmedWasRenderTarget = renderable.IsRenderTarget;
-        _dimmedAlpha = renderable.Alpha;
-        renderable.IsRenderTarget = true;
-        renderable.Alpha = hide ? 0 : DimmedAlpha;
-    }
-
-    private void Undim()
-    {
-        if (_dimmed is not null)
-        {
-            _dimmed.IsRenderTarget = _dimmedWasRenderTarget;
-            _dimmed.Alpha = _dimmedAlpha;
-            _dimmed = null;
         }
     }
 
@@ -878,10 +599,10 @@ public sealed class DragDrop
             return false;
         }
 
-        FinishFlightNow();
+        _preview.FinishNow();
         _source = source;
         _data = data;
-        Dim(source.Visual, hide: false);
+        _preview.Dim(source.Visual, hide: false);
         _phase = Phase.Navigation;
         UpdateNavigationTarget();
         _molib.Sound.Raise(UiSoundKind.DragStarted, source.Visual);
@@ -907,7 +628,7 @@ public sealed class DragDrop
         {
             Finish(drop: true);
         }
-        else if (_molib.Input.FocusTarget is { } focus && _source is { } source
+        else if (_molib.Input.Focus.Target is { } focus && _source is { } source
             && VisualTree.IsInside(focus.Visual, source.Visual))
         {
             Finish(drop: false);
@@ -916,7 +637,7 @@ public sealed class DragDrop
 
     private void UpdateNavigationTarget()
     {
-        DragRegistration? target = FindRegistration(_molib.Input.FocusTarget?.Visual, asSource: false);
+        DragRegistration? target = FindRegistration(_molib.Input.Focus.Target?.Visual, asSource: false);
         SetTarget(ReferenceEquals(target, _source) ? null : target);
     }
 }

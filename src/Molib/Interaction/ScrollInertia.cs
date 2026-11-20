@@ -21,12 +21,13 @@ namespace Molib.Interaction;
 /// (<c>ScrollChanged</c>), so a viewer that does not move costs nothing per frame. ADR: interaction/scrolling —
 /// Decision.
 /// </para>
+/// <para>
+/// <see cref="ScrollVelocity"/> measures the fling and <see cref="SnapPoints"/> finds where the viewer may come to
+/// rest; this class moves the values and reacts to the viewer, the focus and paging.
+/// </para>
 /// </remarks>
 public sealed class ScrollInertia
 {
-    private const int FrameCount = 5;
-    private const float VelocityWindow = 0.1f;
-    private const float StillWindow = 0.05f;
     private const float StopSpeed = 5f;
     private const float SettleDelay = 0.15f;
     private const float RestDistance = 0.5f;
@@ -35,18 +36,13 @@ public sealed class ScrollInertia
     private const double Tolerance = 0.001;
 
     private readonly Scrolling _owner;
-    private readonly float[] _frameSeconds = new float[FrameCount];
-    private readonly double[] _frameDeltaX = new double[FrameCount];
-    private readonly double[] _frameDeltaY = new double[FrameCount];
-    private int _frameNext;
-    private int _frameFilled;
+    private readonly ScrollVelocity _velocity = new();
+    private readonly SnapPoints _snaps;
     private AxisMotion _horizontal;
     private AxisMotion _vertical;
     private bool _isTracking;
     private bool _isTouch;
-    private double _trackedX;
-    private double _trackedY;
-    private int _pageAtPush;
+    private int _pageAtPush = -1;
     private float _settleSeconds = -1;
     private TextBoxBase? _fieldToReveal;
     private bool _isWriting;
@@ -62,6 +58,7 @@ public sealed class ScrollInertia
         _owner = owner;
         Viewer = viewer;
         Options = options;
+        _snaps = new SnapPoints(viewer, options);
         _knownX = viewer.HorizontalScrollBarValue;
         _knownY = viewer.VerticalScrollBarValue;
         viewer.Visual.PushPreview += HandlePushPreview;
@@ -146,7 +143,7 @@ public sealed class ScrollInertia
         {
             if (isPointerDown)
             {
-                Track(seconds);
+                _velocity.Track(seconds, Viewer.HorizontalScrollBarValue, Viewer.VerticalScrollBarValue);
                 return true;
             }
 
@@ -224,13 +221,13 @@ public sealed class ScrollInertia
             return;
         }
 
-        if (Options.Snap == ScrollSnap.None || !TryGetMainAxis(out bool vertical))
+        if (Options.Snap == ScrollSnap.None || !_snaps.TryGetMainAxis(out bool vertical))
         {
             return;
         }
 
         double point = 0;
-        int index = isNavigation ? SnapOf(focused.Visual, vertical, out point) : -1;
+        int index = isNavigation ? _snaps.Of(focused.Visual, vertical, out point) : -1;
         if (index < 0)
         {
             StartSettle();
@@ -244,11 +241,6 @@ public sealed class ScrollInertia
 
         StartSpring(vertical, point, 0, index);
     }
-
-    private static int LastPage(double maximum, float page) =>
-        page <= 0 ? 0 : (int)Math.Ceiling((maximum / page) - Tolerance);
-
-    private static double PagePoint(int index, float page, double maximum) => Math.Min(index * (double)page, maximum);
 
     /// <remarks>
     /// Molib's own writes also raise <c>ScrollChanged</c>; any other change (the wheel, a bar, the right stick, the
@@ -289,61 +281,12 @@ public sealed class ScrollInertia
         StopMotion();
         _isTracking = true;
         _isTouch = FrameworkElement.MainCursor.LastInputDevice == InputDevice.TouchScreen;
-        _frameNext = 0;
-        _frameFilled = 0;
-        _trackedX = Viewer.HorizontalScrollBarValue;
-        _trackedY = Viewer.VerticalScrollBarValue;
-        if (Options.Snap == ScrollSnap.Pages && TryGetMainAxis(out bool vertical))
-        {
-            _pageAtPush = NearestSnap(vertical, Read(vertical), limitToPushPage: false, out _);
-        }
+        _velocity.Reset(Viewer.HorizontalScrollBarValue, Viewer.VerticalScrollBarValue);
+        _pageAtPush = Options.Snap == ScrollSnap.Pages && _snaps.TryGetMainAxis(out bool vertical)
+            ? _snaps.Nearest(vertical, Read(vertical), out _)
+            : -1;
 
         _owner.Activate(this);
-    }
-
-    private void Track(float seconds)
-    {
-        double x = Viewer.HorizontalScrollBarValue;
-        double y = Viewer.VerticalScrollBarValue;
-        _frameDeltaX[_frameNext] = x - _trackedX;
-        _frameDeltaY[_frameNext] = y - _trackedY;
-        _frameSeconds[_frameNext] = seconds;
-        _frameNext = (_frameNext + 1) % FrameCount;
-        _frameFilled = Math.Min(_frameFilled + 1, FrameCount);
-        _trackedX = x;
-        _trackedY = y;
-    }
-
-    /// <summary>
-    /// The speed of the scroll value at the release: the average over the frames of the last 0.1 s, or 0 when the
-    /// finger rested for the last 0.05 s.
-    /// </summary>
-    /// <remarks>ADR: interaction/scrolling — Measuring velocity.</remarks>
-    private double ReleaseVelocity(bool vertical)
-    {
-        double[] deltas = vertical ? _frameDeltaY : _frameDeltaX;
-        float seconds = 0;
-        float stillSeconds = 0;
-        bool isStill = true;
-        double distance = 0;
-        for (int i = 0; i < _frameFilled && seconds < VelocityWindow; i++)
-        {
-            int index = (_frameNext - 1 - i + FrameCount) % FrameCount;
-            double delta = deltas[index];
-            if (isStill && Math.Abs(delta) < Tolerance)
-            {
-                stillSeconds += _frameSeconds[index];
-            }
-            else
-            {
-                isStill = false;
-            }
-
-            seconds += _frameSeconds[index];
-            distance += delta;
-        }
-
-        return seconds <= 0 || stillSeconds >= StillWindow ? 0 : distance / seconds;
     }
 
     /// <remarks>
@@ -354,9 +297,9 @@ public sealed class ScrollInertia
     /// </remarks>
     private void Release()
     {
-        double velocityX = _isTouch ? ReleaseVelocity(vertical: false) : 0;
-        double velocityY = _isTouch ? ReleaseVelocity(vertical: true) : 0;
-        if (Options.Snap == ScrollSnap.None || !TryGetMainAxis(out bool vertical))
+        double velocityX = _isTouch ? _velocity.ReleaseVelocity(vertical: false) : 0;
+        double velocityY = _isTouch ? _velocity.ReleaseVelocity(vertical: true) : 0;
+        if (Options.Snap == ScrollSnap.None || !_snaps.TryGetMainAxis(out bool vertical))
         {
             Coast(vertical: false, velocityX);
             Coast(vertical: true, velocityY);
@@ -367,7 +310,7 @@ public sealed class ScrollInertia
         if (Math.Abs(velocity) >= StopSpeed)
         {
             double predicted = Read(vertical) + (velocity / Options.Friction);
-            int index = NearestSnap(vertical, predicted, limitToPushPage: true, out double point);
+            int index = _snaps.Nearest(vertical, predicted, out double point, _pageAtPush);
             StartSpring(vertical, point, velocity, index);
         }
         else
@@ -428,9 +371,9 @@ public sealed class ScrollInertia
 
     private void SnapToNearest()
     {
-        if (TryGetMainAxis(out bool vertical))
+        if (_snaps.TryGetMainAxis(out bool vertical))
         {
-            int index = NearestSnap(vertical, Read(vertical), limitToPushPage: false, out double point);
+            int index = _snaps.Nearest(vertical, Read(vertical), out double point);
             StartSpring(vertical, point, 0, index);
         }
     }
@@ -509,130 +452,6 @@ public sealed class ScrollInertia
     }
 
     /// <summary>
-    /// The axis that snaps: the vertical one when it has a range, otherwise the horizontal one.
-    /// </summary>
-    /// <remarks>ADR: interaction/scrolling — Snapping.</remarks>
-    private bool TryGetMainAxis(out bool vertical)
-    {
-        vertical = Viewer.VerticalScrollBarMaximum > 0;
-        return vertical || Viewer.HorizontalScrollBarMaximum > 0;
-    }
-
-    /// <summary>
-    /// The snap point nearest to <paramref name="predicted"/>.
-    /// </summary>
-    /// <returns>Index of the item or page, or <c>-1</c> when the inner panel has no visible children.</returns>
-    /// <remarks>
-    /// Points are found at the moment a target is chosen, not every frame. With <paramref name="limitToPushPage"/>
-    /// a fling turns at most one page from the page under the finger at the press.
-    /// ADR: interaction/scrolling — Snapping.
-    /// </remarks>
-    private int NearestSnap(bool vertical, double predicted, bool limitToPushPage, out double point)
-    {
-        double maximum = Maximum(vertical);
-        if (Options.Snap == ScrollSnap.Pages)
-        {
-            float page = Viewport(vertical);
-            int last = LastPage(maximum, page);
-            int pageIndex = page <= 0 ? 0 : Math.Clamp((int)Math.Round(predicted / page), 0, last);
-            if (limitToPushPage)
-            {
-                pageIndex = Math.Clamp(pageIndex, Math.Max(0, _pageAtPush - 1), Math.Min(last, _pageAtPush + 1));
-            }
-
-            point = PagePoint(pageIndex, page, maximum);
-            return pageIndex;
-        }
-
-        int best = -1;
-        int visibleIndex = 0;
-        double bestDistance = double.MaxValue;
-        point = Math.Clamp(predicted, 0, maximum);
-        ObservableCollection<GraphicalUiElement> children = Viewer.InnerPanel.Children;
-        for (int i = 0; i < children.Count; i++)
-        {
-            GraphicalUiElement child = children[i];
-            if (!child.Visible)
-            {
-                continue;
-            }
-
-            double candidate = ItemPoint(child, vertical, maximum);
-            double distance = Math.Abs(candidate - predicted);
-            if (distance < bestDistance)
-            {
-                bestDistance = distance;
-                best = visibleIndex;
-                point = candidate;
-            }
-
-            visibleIndex++;
-        }
-
-        return best;
-    }
-
-    /// <summary>
-    /// The snap point of the item or page that holds <paramref name="element"/>.
-    /// </summary>
-    /// <returns>Index of the item or page, or <c>-1</c> when the element is not in the inner panel.</returns>
-    private int SnapOf(GraphicalUiElement element, bool vertical, out double point)
-    {
-        point = 0;
-        GraphicalUiElement panel = Viewer.InnerPanel;
-        GraphicalUiElement? item = VisualTree.ChildHolding(element, panel);
-        if (item is null)
-        {
-            return -1;
-        }
-
-        double maximum = Maximum(vertical);
-        if (Options.Snap == ScrollSnap.Pages)
-        {
-            float page = Viewport(vertical);
-            float center = vertical
-                ? element.AbsoluteTop - panel.AbsoluteTop + (element.AbsoluteHeight / 2)
-                : element.AbsoluteLeft - panel.AbsoluteLeft + (element.AbsoluteWidth / 2);
-            int index = page <= 0 ? 0 : Math.Clamp((int)(center / page), 0, LastPage(maximum, page));
-            point = PagePoint(index, page, maximum);
-            return index;
-        }
-
-        int visibleIndex = 0;
-        ObservableCollection<GraphicalUiElement> children = panel.Children;
-        for (int i = 0; i < children.Count; i++)
-        {
-            if (ReferenceEquals(children[i], item))
-            {
-                point = ItemPoint(item, vertical, maximum);
-                return visibleIndex;
-            }
-
-            if (children[i].Visible)
-            {
-                visibleIndex++;
-            }
-        }
-
-        return -1;
-    }
-
-    private double ItemPoint(GraphicalUiElement item, bool vertical, double maximum)
-    {
-        GraphicalUiElement panel = Viewer.InnerPanel;
-        float start = vertical ? item.AbsoluteTop - panel.AbsoluteTop : item.AbsoluteLeft - panel.AbsoluteLeft;
-        float size = vertical ? item.AbsoluteHeight : item.AbsoluteWidth;
-        float viewport = Viewport(vertical);
-        float point = Options.SnapAlign switch
-        {
-            SnapAlign.Center => start + (size / 2) - (viewport / 2),
-            SnapAlign.End => start + size - viewport,
-            _ => start,
-        };
-        return Math.Clamp(point, 0, maximum);
-    }
-
-    /// <summary>
     /// Turns the viewer one page with LB / RB or Ctrl+PageUp / Ctrl+PageDown and moves the focus onto the new page.
     /// </summary>
     /// <param name="step"><c>-1</c> or <c>+1</c>.</param>
@@ -642,18 +461,17 @@ public sealed class ScrollInertia
     /// </remarks>
     private void Page(int step)
     {
-        if (!TryGetMainAxis(out bool vertical))
+        if (!_snaps.TryGetMainAxis(out bool vertical))
         {
             return;
         }
 
-        float page = Viewport(vertical);
-        double maximum = Maximum(vertical);
+        float page = _snaps.Viewport(vertical);
         ref AxisMotion axis = ref AxisOf(vertical);
         int current = axis.Mode == AxisMode.Spring && axis.SnapIndex >= 0
             ? axis.SnapIndex
-            : NearestSnap(vertical, Read(vertical), limitToPushPage: false, out _);
-        int index = Math.Clamp(current + step, 0, LastPage(maximum, page));
+            : _snaps.Nearest(vertical, Read(vertical), out _);
+        int index = Math.Clamp(current + step, 0, _snaps.LastPage(vertical));
         if (index == current)
         {
             return;
@@ -661,12 +479,12 @@ public sealed class ScrollInertia
 
         FocusPage(vertical, index * page, page);
         StopMotion();
-        StartSpring(vertical, PagePoint(index, page, maximum), 0, index);
+        StartSpring(vertical, _snaps.PagePoint(vertical, index), 0, index);
     }
 
     private void FocusPage(bool vertical, float pageStart, float page)
     {
-        if (_owner.Input.FocusTarget is not { } focus || !VisualTree.IsInside(focus.Visual, Viewer.Visual))
+        if (_owner.Input.Focus.Target is not { } focus || !VisualTree.IsInside(focus.Visual, Viewer.Visual))
         {
             return;
         }
@@ -707,7 +525,7 @@ public sealed class ScrollInertia
         }
 
         double top = field.Visual.AbsoluteTop - panel.AbsoluteTop;
-        if (top - Viewer.VerticalScrollBarValue <= Viewport(vertical: true) / 3)
+        if (top - Viewer.VerticalScrollBarValue <= _snaps.Viewport(vertical: true) / 3)
         {
             return;
         }
@@ -726,12 +544,6 @@ public sealed class ScrollInertia
     }
 
     private double Read(bool vertical) => vertical ? Viewer.VerticalScrollBarValue : Viewer.HorizontalScrollBarValue;
-
-    private double Maximum(bool vertical) =>
-        vertical ? Viewer.VerticalScrollBarMaximum : Viewer.HorizontalScrollBarMaximum;
-
-    private float Viewport(bool vertical) =>
-        vertical ? Viewer.ClipContainer.AbsoluteHeight : Viewer.ClipContainer.AbsoluteWidth;
 
     private void Write(bool vertical, double value)
     {
