@@ -14,8 +14,11 @@ namespace Molib.Motion;
 /// </remarks>
 public sealed class Transitions
 {
-    internal Transitions(GumService gum, MotionCore motion, MolibDiagnostics diagnostics)
+    private readonly MolibLifetime _lifetime;
+
+    internal Transitions(GumService gum, MotionCore motion, MolibDiagnostics diagnostics, MolibLifetime lifetime)
     {
+        _lifetime = lifetime;
         Gum = gum;
         Motion = motion;
         Diagnostics = diagnostics;
@@ -62,9 +65,11 @@ public sealed class Transitions
     /// <returns>Transitions bound to <paramref name="visual"/>, configured further with
     /// <see cref="StateTransitions.For(string, MotionPreset)"/>.</returns>
     /// <remarks>ADR: motion/state-transitions — The intercept point.</remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public StateTransitions Create(GraphicalUiElement visual)
     {
         ArgumentNullException.ThrowIfNull(visual);
+        _lifetime.ThrowIfDisposed();
         return new StateTransitions(this, visual);
     }
 }

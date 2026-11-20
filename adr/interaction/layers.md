@@ -142,3 +142,5 @@ layer content to the sound events when showing it ([integration/sound.md](../int
   molib notices such an element only when it is on top and Gum did not answer the cancel: a `ComboBox` drop-down in
   `ModalRoot` therefore is not taken for a foreign window.
 - Closing a layer removes it from `ModalRoot`; the element can be reused by showing it again.
+- Disposing the service closes every open layer at once, top first, with `LayerCloseReason.Code`, without sound events;
+  `Closed` completes ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).

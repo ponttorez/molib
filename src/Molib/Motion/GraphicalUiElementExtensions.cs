@@ -60,6 +60,8 @@ public static class GraphicalUiElementExtensions
     /// ADR: motion/show-hide — Input while hiding.
     /// </remarks>
     /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="then"/> is not a named <see cref="HideAction"/>.
+    /// </exception>
     public static Task<bool> HideAsync(
         this GraphicalUiElement element,
         MolibService molib,
@@ -70,6 +72,7 @@ public static class GraphicalUiElementExtensions
         ArgumentNullException.ThrowIfNull(element);
         ArgumentNullException.ThrowIfNull(molib);
         ArgumentNullException.ThrowIfNull(preset);
+        _ = Guard.Defined(then, nameof(then));
         return molib.ShowHideAnimator.Run(element, show: false, preset, then, cancellationToken);
     }
 }

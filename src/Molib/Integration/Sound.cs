@@ -20,7 +20,8 @@ namespace Molib.Integration;
 /// </para>
 /// <para>
 /// The subscriptions live on the controls themselves: a control the game throws away takes them along, and a
-/// control taken out of the tree gets no input and stays silent. ADR: integration/sound.
+/// control taken out of the tree gets no input and stays silent. molib keeps what it subscribed in a weak table, so
+/// <see cref="Detach"/> and the disposal of the service can take the handlers off again. ADR: integration/sound.
 /// </para>
 /// </remarks>
 public sealed class Sound
@@ -30,10 +31,11 @@ public sealed class Sound
     private static readonly object _mark = new();
 
     private readonly MolibService _molib;
-    private readonly ConditionalWeakTable<FrameworkElement, object> _attached = [];
+    private readonly ConditionalWeakTable<FrameworkElement, Action> _attached = [];
     private readonly ConditionalWeakTable<GraphicalUiElement, object> _muted = [];
     private double _seconds;
     private double _lastValueStep = double.NegativeInfinity;
+    private bool _isShutDown;
 
     internal Sound(MolibService molib)
     {
@@ -61,10 +63,28 @@ public sealed class Sound
     /// the selection of their list. Layers and toasts attach their content themselves.
     /// ADR: integration/sound — Attaching.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void Attach(GraphicalUiElement element)
     {
         ArgumentNullException.ThrowIfNull(element);
-        AttachTree(element);
+        _molib.Lifetime.ThrowIfDisposed();
+        WalkTree(element, attach: true);
+    }
+
+    /// <summary>
+    /// Stops listening to the Forms controls in the subtree of <paramref name="element"/> that <see cref="Attach"/>
+    /// connected, for example when a screen is thrown away while the game goes on. Controls that were not attached
+    /// are skipped.
+    /// </summary>
+    /// <param name="element">Root of the subtree.</param>
+    /// <remarks>
+    /// The handlers hold this module and, through it, the service; a control that outlives a screen would otherwise
+    /// keep calling them. ADR: integration/sound — Attaching.
+    /// </remarks>
+    public void Detach(GraphicalUiElement element)
+    {
+        ArgumentNullException.ThrowIfNull(element);
+        WalkTree(element, attach: false);
     }
 
     /// <summary>
@@ -95,7 +115,7 @@ public sealed class Sound
     /// <param name="element">Where it happened.</param>
     internal void Raise(UiSoundKind kind, GraphicalUiElement element)
     {
-        if (!Enabled || Triggered is null || IsMuted(element))
+        if (!Enabled || _isShutDown || Triggered is null || IsMuted(element))
         {
             return;
         }
@@ -121,6 +141,20 @@ public sealed class Sound
         }
     }
 
+    /// <summary>
+    /// Takes every handler off the attached controls; the service is being disposed.
+    /// </summary>
+    internal void Shutdown()
+    {
+        _isShutDown = true;
+        foreach (KeyValuePair<FrameworkElement, Action> pair in _attached)
+        {
+            pair.Value();
+        }
+
+        _attached.Clear();
+    }
+
     /// <remarks>
     /// Only controls that answer the mouse with a hover state sound on hover: a label or a panel under the mouse is
     /// not something the player points at. ADR: integration/sound — Events.
@@ -144,12 +178,21 @@ public sealed class Sound
         return false;
     }
 
-    private void AttachTree(GraphicalUiElement element)
+    private void WalkTree(GraphicalUiElement element, bool attach)
     {
         if (element is InteractiveGue { FormsControlAsObject: FrameworkElement control }
             && ReferenceEquals(control.Visual, element))
         {
-            AttachControl(control);
+            if (attach)
+            {
+                AttachControl(control);
+            }
+            else if (_attached.TryGetValue(control, out Action? detach))
+            {
+                detach();
+                _attached.Remove(control);
+            }
+
             if (IsPartsOnly(control))
             {
                 return;
@@ -157,57 +200,85 @@ public sealed class Sound
 
             if (control is ScrollViewer viewer)
             {
-                AttachChildren(viewer.InnerPanel);
+                WalkChildren(viewer.InnerPanel, attach);
                 return;
             }
         }
 
-        AttachChildren(element);
+        WalkChildren(element, attach);
     }
 
-    private void AttachChildren(GraphicalUiElement element)
+    private void WalkChildren(GraphicalUiElement element, bool attach)
     {
         var children = element.Children;
         for (int i = 0; i < children.Count; i++)
         {
-            AttachTree(children[i]);
+            WalkTree(children[i], attach);
         }
     }
 
+    /// <remarks>
+    /// Each handler is kept in a local delegate, and the returned action takes exactly those delegates off again.
+    /// This runs once per control when it is attached, not in a frame.
+    /// </remarks>
     private void AttachControl(FrameworkElement control)
     {
-        if (control is ListBoxItem || !_attached.TryAdd(control, _mark))
+        if (control is ListBoxItem || _attached.TryGetValue(control, out _))
         {
             return;
         }
 
         InteractiveGue visual = control.Visual;
+        Action detach = static () => { };
         if (HasHover(control))
         {
-            visual.RollOn += (_, _) => HandleRollOn(control);
+            EventHandler onRollOn = (_, _) => HandleRollOn(control);
+            visual.RollOn += onRollOn;
+            detach += () => visual.RollOn -= onRollOn;
         }
 
-        control.GotFocus += (_, _) => HandleGotFocus(control);
+        EventHandler onGotFocus = (_, _) => HandleGotFocus(control);
+        control.GotFocus += onGotFocus;
+        detach += () => control.GotFocus -= onGotFocus;
         switch (control)
         {
             case ButtonBase button:
-                button.Push += (_, _) => Raise(UiSoundKind.Press, visual);
                 UiSoundKind click = button is ToggleButton ? UiSoundKind.Toggle : UiSoundKind.Click;
-                button.Click += (_, _) => Raise(click, visual);
+                EventHandler onPush = (_, _) => Raise(UiSoundKind.Press, visual);
+                EventHandler onClick = (_, _) => Raise(click, visual);
+                button.Push += onPush;
+                button.Click += onClick;
+                detach += () =>
+                {
+                    button.Push -= onPush;
+                    button.Click -= onClick;
+                };
                 break;
             case Slider slider:
-                slider.ValueChangedByUi += (_, _) => HandleValueStep(visual);
+                EventHandler onStep = (_, _) => HandleValueStep(visual);
+                slider.ValueChangedByUi += onStep;
+                detach += () => slider.ValueChangedByUi -= onStep;
                 break;
             case ComboBox comboBox:
-                comboBox.SelectionChanged += (_, _) => HandleSelection(comboBox, comboBox.ListBox);
+                Action<object, SelectionChangedEventArgs> onComboSelection =
+                    (_, _) => HandleSelection(comboBox, comboBox.ListBox);
+                comboBox.SelectionChanged += onComboSelection;
+                detach += () => comboBox.SelectionChanged -= onComboSelection;
                 break;
             case ListBox list:
-                list.SelectionChanged += (_, _) => HandleSelection(list, popup: null);
+                Action<object, SelectionChangedEventArgs> onListSelection =
+                    (_, _) => HandleSelection(list, popup: null);
+                list.SelectionChanged += onListSelection;
+                detach += () => list.SelectionChanged -= onListSelection;
                 break;
             case IVirtualList virtualList:
-                virtualList.SelectedByUser += (_, _) => Raise(UiSoundKind.Select, visual);
+                EventHandler onSelectedByUser = (_, _) => Raise(UiSoundKind.Select, visual);
+                virtualList.SelectedByUser += onSelectedByUser;
+                detach += () => virtualList.SelectedByUser -= onSelectedByUser;
                 break;
         }
+
+        _attached.Add(control, detach);
     }
 
     private void HandleRollOn(FrameworkElement control)

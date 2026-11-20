@@ -33,8 +33,11 @@ toast.Dismiss();
 - A custom element sizes itself (absolute or by content): the toast takes its size and follows its `SizeChanged`. While
   shown, the element is taken out of its parent, and after it disappears, out of the toast. An element that is already
   in an open toast throws `InvalidOperationException`.
-- `ToastOptions`: `Duration` (seconds, 2.5 by default; non-positive throws `ArgumentOutOfRangeException`), `Placement`,
-  `DismissOnClick`.
+- `ToastOptions`: `Duration` (seconds, 2.5 by default; zero, negative, infinite or `NaN` throws
+  `ArgumentOutOfRangeException` — with `NaN` the toast would never go away), `Placement` (a value outside
+  `ToastPlacement` throws the same), `DismissOnClick`.
+- Disposing the service takes every toast away at once, shown or waiting, without events
+  ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).
 - `Show` returns a `ToastHandle`: `Content`, `Options`, `IsOpen` (waiting in the queue or shown and not closed),
   `Dismiss()` — a queued toast will not appear, a shown one disappears.
 - `molib.Toasts.VisibleCount` — toasts on screen, including the appearing and disappearing ones.

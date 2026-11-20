@@ -52,7 +52,8 @@ While the game window is inactive (`Game.IsActive`), Gum does not read input and
 - `molib.Input.UiGamepads = UiGamepads.Only(index)` — only this gamepad drives the menus (several players, the menu
   belongs to one); `UiGamepads.All` — all four again. molib rebuilds only the Gum gamepads in `GamePadsForUiControl`
   and leaves foreign `IGamePad` objects there. Until the property is set, molib does not touch the list:
-  `UseGamepadDefaults` fills it.
+  `UseGamepadDefaults` fills it. Disposing the service puts all four Gum gamepads back if the property was set
+  ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).
 
 ### Last device
 
@@ -142,6 +143,7 @@ molib.Input.SetPaging(tabs.Visual, step => SelectTab(currentTab + step));  // nu
 - If no marked area is among the ancestors of the focus, molib raises the `PageUnhandled` event with the step, and the
   game handles the press.
 - A press that brought the focus back does not page — like any first navigation press.
+- The marks live in a weak table: an area the game throws away without `SetPaging(area, null)` is not kept alive.
 - Ctrl+Tab is not used: a Gum combo with Tab fires with any modifiers held (verified by running), and Ctrl+Tab would
   first move the focus to the next element.
 - A gamepad has no long press ([gestures.md](gestures.md)): the context action is a separate button the game assigns.

@@ -46,6 +46,7 @@ public sealed class Scaling
     /// </summary>
     public const float MaxUserScale = 2f;
 
+    private readonly MolibLifetime _lifetime;
     private readonly Game _game;
     private readonly GumService _gum;
     private readonly MotionCore _motion;
@@ -56,8 +57,9 @@ public sealed class Scaling
     private bool _isDirty;
     private bool _isOrientationApplied;
 
-    internal Scaling(Game game, GumService gum, MotionCore motion, MolibDiagnostics diagnostics)
+    internal Scaling(Game game, GumService gum, MotionCore motion, MolibDiagnostics diagnostics, MolibLifetime lifetime)
     {
+        _lifetime = lifetime;
         _game = game;
         _gum = gum;
         _motion = motion;
@@ -84,11 +86,13 @@ public sealed class Scaling
     /// molib reports <c>scaling.badUserScale</c> and clamps it; a value that is not a number becomes 1.
     /// ADR: platform/scaling — Formula.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public float UserScale
     {
         get;
         set
         {
+            _lifetime.ThrowIfDisposed();
             float scale = value;
             if (!float.IsFinite(scale) || scale < MinUserScale || scale > MaxUserScale)
             {
@@ -142,6 +146,7 @@ public sealed class Scaling
     /// <param name="baseHeight">Base height in canvas units.</param>
     /// <exception cref="ArgumentOutOfRangeException">A side of the base is zero or negative.</exception>
     /// <exception cref="InvalidOperationException">Scaling is already enabled.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void Enable(int baseWidth, int baseHeight) => Enable(baseWidth, baseHeight, baseWidth, baseHeight);
 
     /// <summary>
@@ -156,12 +161,14 @@ public sealed class Scaling
     /// </remarks>
     /// <exception cref="ArgumentOutOfRangeException">A side of a base is zero or negative.</exception>
     /// <exception cref="InvalidOperationException">Scaling is already enabled.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void Enable(int baseWidth, int baseHeight, int portraitBaseWidth, int portraitBaseHeight)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(baseWidth);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(baseHeight);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portraitBaseWidth);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(portraitBaseHeight);
+        _lifetime.ThrowIfDisposed();
         if (IsEnabled)
         {
             throw new InvalidOperationException("Scaling is already enabled; call Enable once.");
@@ -214,9 +221,11 @@ public sealed class Scaling
     /// an element added later does not have it yet. The state is applied without a state transition: the element was
     /// not on screen with the old orientation. ADR: platform/scaling — Orientation.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void ApplyOrientation(GraphicalUiElement element)
     {
         ArgumentNullException.ThrowIfNull(element);
+        _lifetime.ThrowIfDisposed();
         _motion.BeginInstant();
         try
         {

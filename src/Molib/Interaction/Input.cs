@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics.CodeAnalysis;
+using System.Runtime.CompilerServices;
 using Gum;
 using Gum.Forms.Controls;
 using Gum.Input;
@@ -47,8 +48,10 @@ public sealed class Input
 
     private readonly Game _game;
     private readonly GumService _gum;
+    private readonly MolibLifetime _lifetime;
+    private bool _isUiGamepadsSet;
     private readonly bool[] _wasConnected = new bool[UiGamepads.SlotCount];
-    private readonly Dictionary<GraphicalUiElement, Action<int>> _paging = new(ReferenceEqualityComparer.Instance);
+    private readonly ConditionalWeakTable<GraphicalUiElement, Action<int>> _paging = [];
     private bool _hasCursorPosition;
     private int _cursorX;
     private int _cursorY;
@@ -60,10 +63,11 @@ public sealed class Input
     private bool _frameReceiverMode;
     private bool _areArrowsNavigation;
 
-    internal Input(Game game, GumService gum)
+    internal Input(Game game, GumService gum, MolibLifetime lifetime)
     {
         _game = game;
         _gum = gum;
+        _lifetime = lifetime;
         GamePad[] pads = gum.Gamepads;
         for (int i = 0; i < pads.Length && i < _wasConnected.Length; i++)
         {
@@ -83,12 +87,15 @@ public sealed class Input
     /// <c>IGamePad</c> there. Until it is set, molib leaves the list as <c>UseGamepadDefaults</c> filled it.
     /// ADR: interaction/focus-and-gamepad — Gamepads.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public UiGamepads UiGamepads
     {
         get;
         set
         {
+            _lifetime.ThrowIfDisposed();
             field = value;
+            _isUiGamepadsSet = true;
             ApplyUiGamepads(value);
         }
     }
@@ -154,9 +161,11 @@ public sealed class Input
     /// otherwise it appears with the first navigation press.
     /// ADR: interaction/focus-and-gamepad — Initial focus of a screen.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void FocusScreen(GraphicalUiElement screen, FrameworkElement? initialFocus = null)
     {
         ArgumentNullException.ThrowIfNull(screen);
+        _lifetime.ThrowIfDisposed();
         _screen = screen;
         _screenFocus = initialFocus;
         _remembered = null;
@@ -175,8 +184,11 @@ public sealed class Input
     /// <param name="page">Receives <c>-1</c> or <c>+1</c>; <see langword="null"/> removes the mark.</param>
     /// <remarks>
     /// Gum has no tab control, so molib does not look for tabs itself. When areas are nested, the one nearest to
-    /// the focus pages. ADR: interaction/focus-and-gamepad — Paging: LB / RB.
+    /// the focus pages. The mark lives in a weak table, so it does not keep a thrown-away area alive.
+    /// ADR: interaction/focus-and-gamepad — Paging: LB / RB.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed and <paramref name="page"/> is not
+    /// <see langword="null"/>.</exception>
     public void SetPaging(GraphicalUiElement area, Action<int>? page)
     {
         ArgumentNullException.ThrowIfNull(area);
@@ -186,7 +198,8 @@ public sealed class Input
         }
         else
         {
-            _paging[area] = page;
+            _lifetime.ThrowIfDisposed();
+            _paging.AddOrUpdate(area, page);
         }
     }
 
@@ -261,12 +274,25 @@ public sealed class Input
     }
 
     /// <summary>
-    /// Gives Gum's direction key lists back empty, as Gum has them by default.
+    /// Gives Gum back what this module changed: the direction key lists empty, as Gum has them by default, and all
+    /// four Gum gamepads in <c>GamePadsForUiControl</c> if <see cref="UiGamepads"/> was set. Forgets the screen, the
+    /// remembered focus and the paging marks.
     /// </summary>
+    /// <remarks>ADR: foundation/architecture — Disposal.</remarks>
     internal void Shutdown()
     {
         _areArrowsNavigation = false;
         SetArrowCombos(false);
+        if (_isUiGamepadsSet)
+        {
+            ApplyUiGamepads(UiGamepads.All);
+        }
+
+        _paging.Clear();
+        _screen = null;
+        _screenFocus = null;
+        _remembered = null;
+        _rememberedScope = null;
     }
 
     /// <summary>

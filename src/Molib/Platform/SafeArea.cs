@@ -24,36 +24,49 @@ public sealed class SafeArea
     private readonly Game _game;
     private readonly GumService _gum;
     private readonly MolibDiagnostics _diagnostics;
-    private readonly List<GraphicalUiElement> _containers = [];
+    private readonly MolibLifetime _lifetime;
+    private readonly List<WeakReference<GraphicalUiElement>> _containers = [];
+    private ISafeAreaSource? _source;
     private Point _backBufferSize;
     private float _zoom;
     private volatile bool _isSourceChanged;
 
-    internal SafeArea(Game game, GumService gum, MolibDiagnostics diagnostics)
+    internal SafeArea(Game game, GumService gum, MolibDiagnostics diagnostics, MolibLifetime lifetime)
     {
         _game = game;
         _gum = gum;
         _diagnostics = diagnostics;
+        _lifetime = lifetime;
     }
 
     /// <summary>
     /// Where the insets come from; <see langword="null"/> means the whole screen is safe, as on desktop.
     /// </summary>
     /// <remarks>Setting a source reads its insets at once and applies them to the attached containers.</remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed and the value is not
+    /// <see langword="null"/>.</exception>
     public ISafeAreaSource? Source
     {
-        get;
+        get => _source;
         set
         {
-            if (ReferenceEquals(field, value))
+            if (ReferenceEquals(_source, value))
             {
                 return;
             }
 
-            field?.Changed -= OnSourceChanged;
-            field = value;
-            field?.Changed += OnSourceChanged;
-            Refresh();
+            if (value is not null)
+            {
+                _lifetime.ThrowIfDisposed();
+            }
+
+            _source?.Changed -= OnSourceChanged;
+            _source = value;
+            _source?.Changed += OnSourceChanged;
+            if (!_lifetime.IsDisposed)
+            {
+                Refresh();
+            }
         }
     }
 
@@ -79,14 +92,17 @@ public sealed class SafeArea
     /// <remarks>
     /// molib takes over the position and size of the container: <c>X</c> and <c>Y</c> become the left and top
     /// insets, <c>Width</c> and <c>Height</c> become <c>RelativeToParent</c> minus both insets of the axis. Attaching
-    /// the same container again does nothing. ADR: platform/safe-area — Applying.
+    /// the same container again does nothing. The container is held by a weak reference, so a screen the game throws
+    /// away without <see cref="Detach"/> is not kept alive. ADR: platform/safe-area — Applying.
     /// </remarks>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void Attach(GraphicalUiElement container)
     {
         ArgumentNullException.ThrowIfNull(container);
-        if (!_containers.Contains(container))
+        _lifetime.ThrowIfDisposed();
+        if (IndexOf(container) < 0)
         {
-            _containers.Add(container);
+            _containers.Add(new WeakReference<GraphicalUiElement>(container));
             Fit(container, Insets);
         }
     }
@@ -99,7 +115,14 @@ public sealed class SafeArea
     public bool Detach(GraphicalUiElement container)
     {
         ArgumentNullException.ThrowIfNull(container);
-        return _containers.Remove(container);
+        int index = IndexOf(container);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        _containers.RemoveAt(index);
+        return true;
     }
 
     /// <summary>
@@ -126,7 +149,19 @@ public sealed class SafeArea
     /// <summary>
     /// Unsubscribes from the source.
     /// </summary>
-    internal void Dispose() => Source = null;
+    /// <summary>
+    /// Leaves the source's event and forgets the attached containers; the service is being disposed.
+    /// </summary>
+    /// <remarks>
+    /// The containers keep the insets they have: the screen does not jump under the cutout while the game tears
+    /// molib down or creates a new service. ADR: platform/safe-area — Applying; foundation/architecture — Disposal.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        _source?.Changed -= OnSourceChanged;
+        _source = null;
+        _containers.Clear();
+    }
 
     private static void Fit(GraphicalUiElement container, Thickness insets)
     {
@@ -154,6 +189,19 @@ public sealed class SafeArea
     }
 
     private static float ValidInset(float inset) => float.IsFinite(inset) && inset > 0 ? inset : 0;
+
+    private int IndexOf(GraphicalUiElement container)
+    {
+        for (int i = 0; i < _containers.Count; i++)
+        {
+            if (_containers[i].TryGetTarget(out GraphicalUiElement? attached) && ReferenceEquals(attached, container))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
 
     private void OnSourceChanged(object? sender, EventArgs e) => _isSourceChanged = true;
 
@@ -194,9 +242,16 @@ public sealed class SafeArea
         }
 
         Insets = insets;
-        for (int i = 0; i < _containers.Count; i++)
+        for (int i = _containers.Count - 1; i >= 0; i--)
         {
-            Fit(_containers[i], insets);
+            if (_containers[i].TryGetTarget(out GraphicalUiElement? container))
+            {
+                Fit(container, insets);
+            }
+            else
+            {
+                _containers.RemoveAt(i);
+            }
         }
 
         Changed?.Invoke(this, EventArgs.Empty);

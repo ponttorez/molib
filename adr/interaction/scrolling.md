@@ -33,8 +33,12 @@ scrollViewer.UseInertia(molib, new InertiaOptions { Friction = 4f });
 
 - An extension method on `ScrollViewer` in `Molib.Interaction`; it works for all subclasses. It returns a
   `ScrollInertia`: `Viewer`, `Options`, `SnapIndex`, the `SnapChanged` event.
-- A second call for the same area is a programmer error (`InvalidOperationException`). `Friction` is a positive number,
-  otherwise `ArgumentOutOfRangeException`.
+- A second call for the same area is a programmer error (`InvalidOperationException`). `Friction` is a positive finite
+  number, and `Snap` and `SnapAlign` are named values of their enums, otherwise `ArgumentOutOfRangeException` where the
+  option is set.
+- `ScrollInertia.Detach()` stops the motion where it is, takes the handlers off the area, removes the paging mark of a
+  `Pages` area, and lets the area get new inertia. A second `Detach` does nothing; disposing the service detaches
+  every area ([foundation/architecture.md](../foundation/architecture.md), section «Detaching from elements»).
 - molib finds the area from the focused element through a weak table: the attachment does not hold an area the game
   discarded.
 

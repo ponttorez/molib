@@ -1,4 +1,3 @@
-using System.Runtime.CompilerServices;
 using FlatRedBall.Glue.StateInterpolation;
 
 namespace Molib.Motion;
@@ -99,8 +98,8 @@ public sealed class MotionPreset
     /// <exception cref="ArgumentOutOfRangeException">A parameter is not a positive number.</exception>
     public static MotionPreset Spring(float stiffness, float dampingRatio)
     {
-        ThrowIfNotPositive(stiffness);
-        ThrowIfNotPositive(dampingRatio);
+        _ = Guard.Positive(stiffness, nameof(stiffness));
+        _ = Guard.Positive(dampingRatio, nameof(dampingRatio));
         return new MotionPreset(MotionKind.Spring, stiffness, dampingRatio, 0, InterpolationType.Linear, Easing.Out);
     }
 
@@ -112,18 +111,13 @@ public sealed class MotionPreset
     /// <param name="easing">Which end of the curve is eased.</param>
     /// <returns>The preset.</returns>
     /// <remarks><c>Back</c> and <c>Elastic</c> leave the 0–1 range, like an overshooting spring.</remarks>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="duration"/> is not a positive number.</exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="duration"/> is not a positive number, or
+    /// <paramref name="interpolation"/> or <paramref name="easing"/> is not a named value of its Gum enum.</exception>
     public static MotionPreset Tween(float duration, InterpolationType interpolation, Easing easing)
     {
-        ThrowIfNotPositive(duration);
+        _ = Guard.Positive(duration, nameof(duration));
+        _ = Guard.Defined(interpolation, nameof(interpolation));
+        _ = Guard.Defined(easing, nameof(easing));
         return new MotionPreset(MotionKind.Tween, 0, 0, duration, interpolation, easing);
-    }
-
-    private static void ThrowIfNotPositive(float value, [CallerArgumentExpression(nameof(value))] string? name = null)
-    {
-        if (!float.IsFinite(value) || value <= 0)
-        {
-            throw new ArgumentOutOfRangeException(name, value, "The value must be a positive number.");
-        }
     }
 }

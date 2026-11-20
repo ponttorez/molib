@@ -118,6 +118,22 @@ public sealed class ScrollInertia
     public event EventHandler<SnapChangedEventArgs>? SnapChanged;
 
     /// <summary>
+    /// Whether the inertia is still on its viewer.
+    /// </summary>
+    internal bool IsAttached { get; private set; } = true;
+
+    /// <summary>
+    /// Takes the inertia off the viewer: the motion stops where it is, the handlers leave the viewer's events, a
+    /// <see cref="ScrollSnap.Pages"/> viewer is no longer a paging area, and the viewer may get new inertia. Does
+    /// nothing if it is detached already.
+    /// </summary>
+    /// <remarks>
+    /// The handlers hold this object and, through it, the service; a viewer that outlives its screen would otherwise
+    /// keep them. The disposal of the service detaches every inertia. ADR: interaction/scrolling — Attaching.
+    /// </remarks>
+    public void Detach() => _owner.Remove(this);
+
+    /// <summary>
     /// Records the press, coasts or springs the values and finishes the wait before a snap.
     /// </summary>
     /// <param name="isPointerDown">Whether the primary button of the cursor or a finger is down.</param>
@@ -166,6 +182,24 @@ public sealed class ScrollInertia
     /// </summary>
     /// <remarks>ADR: interaction/drag-drop — Scrolling during a drag.</remarks>
     internal void StopTracking() => _isTracking = false;
+
+    /// <summary>
+    /// Stops the motion, leaves the viewer's events and gives up the paging mark.
+    /// </summary>
+    internal void Unsubscribe()
+    {
+        _isTracking = false;
+        _fieldToReveal = null;
+        StopMotion();
+        Viewer.Visual.PushPreview -= HandlePushPreview;
+        Viewer.ScrollChanged -= HandleScrollChanged;
+        if (Options.Snap == ScrollSnap.Pages)
+        {
+            _owner.Input.SetPaging(Viewer.Visual, page: null);
+        }
+
+        IsAttached = false;
+    }
 
     /// <summary>
     /// Reacts to the focus moving onto <paramref name="focused"/> inside the viewer.

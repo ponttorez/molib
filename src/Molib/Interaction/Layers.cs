@@ -112,6 +112,24 @@ public sealed class Layers
     }
 
     /// <summary>
+    /// Closes every open layer at once with <see cref="LayerCloseReason.Code"/>, top first; the service is being
+    /// disposed.
+    /// </summary>
+    /// <remarks>
+    /// The motion core is already shut down, so each close finishes in the call: the layer leaves the tree, its
+    /// content is hidden and unparented, the focus returns as after any close, and <c>Closed</c> completes. Layers
+    /// that were already closing finished when the motion core finished their animations.
+    /// ADR: interaction/layers — Limits; foundation/architecture — Disposal.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        while (_open.Count > 0)
+        {
+            _ = Close(_open[^1], LayerCloseReason.Code);
+        }
+    }
+
+    /// <summary>
     /// Handles a cancel press. Runs after <c>Input</c> in <c>MolibService.Update</c>.
     /// </summary>
     /// <remarks>
@@ -185,6 +203,7 @@ public sealed class Layers
     private LayerHandle Show(GraphicalUiElement content, LayerOptions? options, bool isModal)
     {
         ArgumentNullException.ThrowIfNull(content);
+        _molib.Lifetime.ThrowIfDisposed();
         ShowHideAnimator animator = _molib.ShowHideAnimator;
         options ??= new LayerOptions();
         for (int i = 0; i < _open.Count; i++)

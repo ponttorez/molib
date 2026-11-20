@@ -42,6 +42,11 @@ public sealed class LongPress
     }
 
     /// <summary>
+    /// Whether the long press is still on its element.
+    /// </summary>
+    internal bool IsAttached { get; private set; } = true;
+
+    /// <summary>
     /// The element that is held.
     /// </summary>
     public InteractiveGue Element { get; }
@@ -61,6 +66,17 @@ public sealed class LongPress
     /// Whether the owner keeps this long press in its list of held ones.
     /// </summary>
     internal bool IsListed { get; set; }
+
+    /// <summary>
+    /// Takes the long press off the element: its handlers leave the element's events, and the element may get a new
+    /// long press. Does nothing if it is detached already.
+    /// </summary>
+    /// <remarks>
+    /// The handlers hold this object and, through it, the service; an element that outlives its screen would
+    /// otherwise keep them. The disposal of the service detaches every long press. ADR: interaction/gestures — Long
+    /// press.
+    /// </remarks>
+    public void Detach() => _owner.Remove(this);
 
     /// <summary>
     /// Raised once per press, when the pointer has been held on the element for
@@ -97,6 +113,17 @@ public sealed class LongPress
         ConsumedClick = true;
         Triggered?.Invoke(this, EventArgs.Empty);
         return false;
+    }
+
+    /// <summary>
+    /// Leaves the events of the element and forgets a press that is held.
+    /// </summary>
+    internal void Unsubscribe()
+    {
+        Element.Push -= HandlePush;
+        Element.LosePush -= HandleLosePush;
+        IsAttached = false;
+        _isHeld = false;
     }
 
     private static float Distance(float x, float y) => MathF.Sqrt((x * x) + (y * y));

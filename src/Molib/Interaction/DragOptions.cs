@@ -1,4 +1,3 @@
-using System.Globalization;
 using Gum.Wireframe;
 
 namespace Molib.Interaction;
@@ -22,18 +21,7 @@ public sealed class DragOptions
     public float Threshold
     {
         get;
-        init
-        {
-            if (!float.IsFinite(value) || value < 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(value),
-                    value,
-                    string.Create(CultureInfo.InvariantCulture, $"Threshold must be 0 or more; got {value}."));
-            }
-
-            field = value;
-        }
+        init => field = Guard.NonNegative(value, nameof(Threshold));
     } = 8f;
 
     /// <summary>

@@ -48,6 +48,40 @@ internal sealed class Gestures
     }
 
     /// <summary>
+    /// Takes <paramref name="longPress"/> off its element and out of the lists.
+    /// </summary>
+    /// <param name="longPress">A long press of this module.</param>
+    public void Remove(LongPress longPress)
+    {
+        if (!longPress.IsAttached)
+        {
+            return;
+        }
+
+        longPress.Unsubscribe();
+        _longPresses.Remove(longPress.Element);
+        if (longPress.IsListed)
+        {
+            longPress.IsListed = false;
+            _held.Remove(longPress);
+        }
+    }
+
+    /// <summary>
+    /// Takes every long press off its element; the service is being disposed.
+    /// </summary>
+    public void Shutdown()
+    {
+        foreach (KeyValuePair<InteractiveGue, LongPress> pair in _longPresses)
+        {
+            pair.Value.Unsubscribe();
+        }
+
+        _longPresses.Clear();
+        _held.Clear();
+    }
+
+    /// <summary>
     /// Counts the hold time of every held press.
     /// </summary>
     /// <param name="deltaSeconds">Frame time, already limited by the service; real time, not scaled.</param>

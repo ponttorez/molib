@@ -85,6 +85,9 @@ No Hungarian notation and no abbreviations except common ones (`Ui`, `Id`). Not 
 
 - **A programmer error** (a wrong argument, a call in the wrong state) is an exception: `ArgumentNullException.ThrowIfNull`,
   `ArgumentOutOfRangeException.ThrowIf*`, `InvalidOperationException` with a clear message.
+- Values from code are checked where they are set, not later in a frame: a time, a distance or a size must be a
+  finite number in its range (`NaN` and infinity are refused), and an enum must be one of its named values. The
+  internal `Guard` does both the same way everywhere (`Positive`, `NonNegative`, `Defined`).
 - **A data error** (a missing file, a bad value from settings) is a warning through the molib diagnostics hook plus a
   default value; work goes on, and a repeat of the same warning stays silent.
 - Internal invariants — `Debug.Assert`.

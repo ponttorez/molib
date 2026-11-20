@@ -72,6 +72,42 @@ internal sealed class Scrolling
     }
 
     /// <summary>
+    /// Takes <paramref name="inertia"/> off its viewer and out of the lists.
+    /// </summary>
+    /// <param name="inertia">An inertia of this module.</param>
+    public void Remove(ScrollInertia inertia)
+    {
+        if (!inertia.IsAttached)
+        {
+            return;
+        }
+
+        inertia.Unsubscribe();
+        _inertias.Remove(inertia.Viewer);
+        if (inertia.IsListed)
+        {
+            inertia.IsListed = false;
+            _active.Remove(inertia);
+        }
+    }
+
+    /// <summary>
+    /// Takes every inertia off its viewer; the service is being disposed.
+    /// </summary>
+    public void Shutdown()
+    {
+        foreach (KeyValuePair<ScrollViewer, ScrollInertia> pair in _inertias)
+        {
+            pair.Value.Unsubscribe();
+            pair.Value.IsListed = false;
+        }
+
+        _inertias.Clear();
+        _active.Clear();
+        _lastReceiver = null;
+    }
+
+    /// <summary>
     /// Puts <paramref name="inertia"/> into the list of active ones until it has no more work.
     /// </summary>
     /// <param name="inertia">An inertia of this module.</param>

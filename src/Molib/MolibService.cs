@@ -22,6 +22,14 @@ namespace Molib;
 /// service registers itself in <see cref="Game.Services"/> and refuses to be created twice; the registration also
 /// lets any code that has the game find the service. ADR: foundation/architecture — Entry point.
 /// </para>
+/// <para>
+/// Threads: molib and Gum are used from the game thread, the one that runs <c>Game.Update</c>. Every method,
+/// property and event of molib belongs to that thread: events are raised there, inside <see cref="Update"/> or
+/// inside a Gum event, and tasks complete there, so code after <c>await</c> may change the interface. Two things may
+/// come from any thread: cancelling the token of <c>ShowAsync</c> or <c>HideAsync</c>, and the <c>Changed</c> event
+/// of a safe area source. molib only marks them and acts in the next <see cref="Update"/>.
+/// ADR: foundation/architecture — Threads.
+/// </para>
 /// </remarks>
 public sealed class MolibService : IDisposable
 {
@@ -29,7 +37,7 @@ public sealed class MolibService : IDisposable
 
     private readonly Game _game;
     private bool _isBackBufferChecked;
-    private bool _isDisposed;
+    private bool _isDisposing;
 
     /// <summary>
     /// Creates the service and registers it in <see cref="Game.Services"/>.
@@ -56,14 +64,15 @@ public sealed class MolibService : IDisposable
         }
 
         _game = game;
+        Lifetime = new MolibLifetime();
         Diagnostics = new MolibDiagnostics();
         Motion = new MotionCore();
         Sound = new Sound(this);
-        Scaling = new Scaling(game, gum, Motion, Diagnostics);
-        SafeArea = new SafeArea(game, gum, Diagnostics);
-        Transitions = new Transitions(gum, Motion, Diagnostics);
+        Scaling = new Scaling(game, gum, Motion, Diagnostics, Lifetime);
+        SafeArea = new SafeArea(game, gum, Diagnostics, Lifetime);
+        Transitions = new Transitions(gum, Motion, Diagnostics, Lifetime);
         ShowHideAnimator = new ShowHideAnimator(Motion, Diagnostics);
-        Input = new Input(game, gum);
+        Input = new Input(game, gum, Lifetime);
         Layers = new Layers(this, game, gum);
         Gestures = new Gestures();
         DragDrop = new DragDrop(this, game, gum);
@@ -124,6 +133,11 @@ public sealed class MolibService : IDisposable
     public Sound Sound { get; }
 
     /// <summary>
+    /// Whether the service is disposed, shared with the modules.
+    /// </summary>
+    internal MolibLifetime Lifetime { get; }
+
+    /// <summary>
     /// Runs the long presses of elements.
     /// </summary>
     /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
@@ -131,7 +145,7 @@ public sealed class MolibService : IDisposable
     {
         get
         {
-            ObjectDisposedException.ThrowIf(_isDisposed, this);
+            ObjectDisposedException.ThrowIf(Lifetime.IsDisposed, this);
             return field;
         }
     }
@@ -144,7 +158,7 @@ public sealed class MolibService : IDisposable
     {
         get
         {
-            ObjectDisposedException.ThrowIf(_isDisposed, this);
+            ObjectDisposedException.ThrowIf(Lifetime.IsDisposed, this);
             return field;
         }
     }
@@ -157,7 +171,7 @@ public sealed class MolibService : IDisposable
     {
         get
         {
-            ObjectDisposedException.ThrowIf(_isDisposed, this);
+            ObjectDisposedException.ThrowIf(Lifetime.IsDisposed, this);
             return field;
         }
     }
@@ -173,14 +187,14 @@ public sealed class MolibService : IDisposable
     /// the layers, because a cancel press ends a drag first; motion after the modules that start animations; the
     /// timers of toasts after motion, which completes their animations; last, the focus is remembered for the next
     /// frame, after anything that could still move it. The frame time is limited to 0.1 s, so animations do not jump
-    /// after a pause or a stall.
-    /// ADR: foundation/architecture — Update order.
+    /// after a pause or a stall. An event handler may dispose the service in the middle of the frame; the update then
+    /// stops after that module. ADR: foundation/architecture — Update order, Disposal.
     /// </remarks>
     /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void Update(GameTime gameTime)
     {
         ArgumentNullException.ThrowIfNull(gameTime);
-        ObjectDisposedException.ThrowIf(_isDisposed, this);
+        ObjectDisposedException.ThrowIf(Lifetime.IsDisposed, this);
 
         if (!_isBackBufferChecked)
         {
@@ -190,35 +204,95 @@ public sealed class MolibService : IDisposable
 
         float deltaSeconds = Math.Clamp((float)gameTime.ElapsedGameTime.TotalSeconds, 0f, MaxDeltaSeconds);
         Scaling.Update();
+        if (IsEnding())
+        {
+            return;
+        }
+
         SafeArea.Update();
         Input.Update();
+        if (IsEnding())
+        {
+            return;
+        }
+
         Layers.Update();
+        if (IsEnding())
+        {
+            return;
+        }
+
         Sound.Update(deltaSeconds);
         Gestures.Update(deltaSeconds);
+        if (IsEnding())
+        {
+            return;
+        }
+
         DragDrop.Update(deltaSeconds);
+        if (IsEnding())
+        {
+            return;
+        }
+
         Scrolling.Update(deltaSeconds);
+        if (IsEnding())
+        {
+            return;
+        }
+
         Motion.Update(deltaSeconds);
+        if (IsEnding())
+        {
+            return;
+        }
+
         Toasts.Update(deltaSeconds);
         Input.EndFrame();
     }
 
     /// <summary>
-    /// Unsubscribes molib from the game and Gum and removes the service from <see cref="Game.Services"/>.
+    /// Ends molib: finishes what is running, gives Gum back what molib changed, takes molib's handlers off Gum
+    /// elements and removes the service from <see cref="Game.Services"/>. A new service may be created afterwards.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// In order: sound events stop; every running animation jumps to its end and completes (a hide hides or removes
+    /// its element, a <c>ShowAsync</c> or <c>HideAsync</c> task completes with <see langword="true"/>); a drag ends
+    /// without events, its source gets its own look back and the copy leaves the tree; every layer closes at once
+    /// and its <c>Closed</c> completes with <see cref="LayerCloseReason.Code"/>; every toast, shown or waiting, goes
+    /// away; long presses, scroll inertia and sound subscriptions leave their elements; Gum's direction keys and
+    /// menu gamepads come back as Gum had them; the safe area forgets its source and containers. Scaling stays as
+    /// it is, so the screen does not jump.
+    /// </para>
+    /// <para>
+    /// Dispose raises no molib events. After it, methods that add or start something throw
+    /// <see cref="ObjectDisposedException"/>, while methods that remove, stop or undo something do nothing.
+    /// ADR: foundation/architecture — Disposal.
+    /// </para>
+    /// </remarks>
     public void Dispose()
     {
-        if (_isDisposed)
+        if (Lifetime.IsDisposed || _isDisposing)
         {
             return;
         }
 
-        _isDisposed = true;
-        SafeArea.Dispose();
-        DragDrop.Shutdown();
-        Input.Shutdown();
+        _isDisposing = true;
+        Sound.Shutdown();
         Motion.Shutdown();
+        DragDrop.Shutdown();
+        Layers.Shutdown();
+        Toasts.Shutdown();
+        Gestures.Shutdown();
+        Scrolling.Shutdown();
+        Input.Shutdown();
+        SafeArea.Shutdown();
+        Lifetime.End();
         _game.Services.RemoveService(typeof(MolibService));
     }
+
+    private bool IsEnding() => Lifetime.IsDisposed || _isDisposing;
 
     /// <remarks>
     /// Runs in the first <see cref="Update"/> rather than in the constructor: the game cannot subscribe to

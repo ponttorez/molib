@@ -28,7 +28,10 @@ await toast.ShowAsync(molib, ShowHide.FadeSlideUp.WithMotion(MotionPreset.Bouncy
 - `CancellationToken`: cancellation finishes the animation at once (ending values, hiding or removal), and the task
   completes as cancelled. Cancellation may come from any thread: molib only marks the call and finishes it in the next
   `MolibService.Update`. A token cancelled before the call finishes the animation right in the call.
-- After the service is disposed — `ObjectDisposedException`.
+- After the service is disposed — `ObjectDisposedException`. Disposing the service finishes every running show and
+  hide at once (the ending values, the hide action, the original render target and input flags) and completes its
+  task with `true` ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).
+- `HideAction` outside its named values throws `ArgumentOutOfRangeException`.
 
 ## Presets
 

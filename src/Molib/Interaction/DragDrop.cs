@@ -163,10 +163,12 @@ public sealed class DragDrop
     /// <param name="getData">Gives the dragged object when the drag starts; <see langword="null"/> means there is
     /// nothing to drag.</param>
     /// <param name="options">Threshold, copy and source look; defaults when omitted.</param>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void AddSource(GraphicalUiElement visual, Func<object?> getData, DragOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(visual);
         ArgumentNullException.ThrowIfNull(getData);
+        _molib.Lifetime.ThrowIfDisposed();
         DragRegistration registration = Register(visual);
         registration.GetData = getData;
         registration.Options = options ?? new DragOptions();
@@ -180,11 +182,13 @@ public sealed class DragDrop
     /// <param name="canDrop">Whether the target takes the data; called when the drag comes over the target.</param>
     /// <param name="drop">Takes the data; called on the release over the target when <paramref name="canDrop"/>
     /// returned <see langword="true"/>.</param>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public void AddTarget(GraphicalUiElement visual, Func<object, bool> canDrop, Action<object> drop)
     {
         ArgumentNullException.ThrowIfNull(visual);
         ArgumentNullException.ThrowIfNull(canDrop);
         ArgumentNullException.ThrowIfNull(drop);
+        _molib.Lifetime.ThrowIfDisposed();
         DragRegistration registration = Register(visual);
         registration.CanDrop = canDrop;
         registration.Drop = drop;
@@ -231,9 +235,11 @@ public sealed class DragDrop
     /// <returns><see langword="true"/> when the drag started; <see langword="false"/> when a drag is already going
     /// on or the source has nothing to drag.</returns>
     /// <exception cref="ArgumentException"><paramref name="source"/> is not a registered source.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public bool Pick(GraphicalUiElement source)
     {
         ArgumentNullException.ThrowIfNull(source);
+        _molib.Lifetime.ThrowIfDisposed();
         if (!_registrations.TryGetValue(source, out DragRegistration? registration) || registration.GetData is null)
         {
             throw new ArgumentException(
@@ -313,13 +319,32 @@ public sealed class DragDrop
     }
 
     /// <summary>
-    /// Takes the drag copy out of the tree.
+    /// Ends a drag without raising events and forgets every source and target; the service is being disposed.
     /// </summary>
+    /// <remarks>
+    /// The source gets its own transparency and render target back, the target its <c>None</c> state (applied at
+    /// once: the motion core is already shut down), and the copy leaves the tree. <see cref="Cancelled"/> is not
+    /// raised: the game is tearing molib down, not cancelling a move. The registrations hold the game's delegates, so
+    /// they are cleared. ADR: interaction/drag-drop — Limits; foundation/architecture — Disposal.
+    /// </remarks>
     internal void Shutdown()
     {
-        _host?.RemoveFromRoot();
-        _host = null;
-        _copy = null;
+        if (IsDragging)
+        {
+            SetTarget(null);
+            Undim();
+        }
+
+        _phase = Phase.Idle;
+        _source = null;
+        _sourceScroll = null;
+        _data = null;
+        _modal = null;
+        _targets.Clear();
+        _scrollAreas.Clear();
+        _molib.Motion.Stop(_flight.Progress);
+        EndFlight();
+        _registrations.Clear();
     }
 
     /// <summary>

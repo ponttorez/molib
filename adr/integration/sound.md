@@ -32,9 +32,12 @@ molib.Sound.Attach(mainMenuScreen);
   control again does nothing; controls added to the subtree later are attached by a new call.
 - The walk does not go inside controls built from parts (buttons, sliders, `ComboBox`, text fields, `ListBox`), and in
   a `ScrollViewer` it goes only into the content: scroll bars and thumbs stay silent.
-- The subscriptions live on the controls themselves: there is no need to remove them. A control the game discards takes
-  them with it, and a control removed from the tree gets no input and stays silent; returned to the tree, it sounds
-  again.
+- The subscriptions live on the controls themselves. A control the game discards takes them with it, and a control
+  removed from the tree gets no input and stays silent; returned to the tree, it sounds again.
+- `Detach(element)` walks the subtree the same way and takes the handlers off the attached controls in it — for a
+  screen whose controls outlive it ([foundation/architecture.md](../foundation/architecture.md), section «Detaching
+  from elements»). molib keeps the handlers of each control in a weak table to take exactly them off; disposing the
+  service detaches every control.
 - molib attaches the content of layers and toasts itself when it shows them.
 - Dynamic list rows sound through the events of the list itself (`SelectionChanged`), not of the rows.
 

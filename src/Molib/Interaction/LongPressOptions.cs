@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace Molib.Interaction;
 
 /// <summary>
@@ -15,17 +13,6 @@ public sealed class LongPressOptions
     public float Duration
     {
         get;
-        init
-        {
-            if (!float.IsFinite(value) || value <= 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(value),
-                    value,
-                    string.Create(CultureInfo.InvariantCulture, $"Duration must be a positive number; got {value}."));
-            }
-
-            field = value;
-        }
+        init => field = Guard.Positive(value, nameof(Duration));
     } = 0.5f;
 }

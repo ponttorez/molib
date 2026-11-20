@@ -83,9 +83,18 @@ public sealed class MotionCore
     /// </summary>
     /// <param name="progress">Progress owned by the caller.</param>
     /// <param name="preset">A spring or a tween; an owner applies an instant preset itself.</param>
+    /// <remarks>After the service is disposed the progress jumps to its end and completes right here.</remarks>
     internal void Start(MotionProgress progress, MotionPreset preset)
     {
         progress.Restart(preset);
+        if (IsShutDown)
+        {
+            progress.Finish();
+            progress.Target.ApplyProgress(progress.Progress);
+            progress.Target.CompleteMotion();
+            return;
+        }
+
         if (!progress.IsRunning)
         {
             progress.IsRunning = true;
@@ -165,9 +174,41 @@ public sealed class MotionCore
     }
 
     /// <summary>
-    /// Makes every later change apply at once: after the service is disposed nothing moves animations any more.
+    /// Finishes every running animation at once and makes every later change apply at once: after the service is
+    /// disposed nothing moves animations any more.
     /// </summary>
-    internal void Shutdown() => IsShutDown = true;
+    /// <remarks>
+    /// An animation left halfway would leave its element in a mixed look for good: a color between two states, a
+    /// panel half faded with its render target still on. So each one jumps to its end and its owner completes it as
+    /// usual: a hide hides or removes, a show-hide task completes, a drag copy is taken away.
+    /// ADR: foundation/architecture — Disposal.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        IsShutDown = true;
+        int count = _active.Count;
+        for (int i = 0; i < count; i++)
+        {
+            MotionProgress progress = _active[i];
+            if (!progress.IsRunning)
+            {
+                continue;
+            }
+
+            int generation = progress.Generation;
+            progress.Finish();
+            progress.Target.ApplyProgress(progress.Progress);
+            if (progress.IsRunning && progress.Generation == generation)
+            {
+                progress.IsRunning = false;
+                ActiveCount--;
+                _finished.Add((progress, generation));
+            }
+        }
+
+        RemoveStopped();
+        NotifyFinished();
+    }
 
     private void RemoveStopped()
     {

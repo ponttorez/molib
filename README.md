@@ -82,6 +82,17 @@ public sealed class MyGame : Game
 `Diagnostics.Warning` reports misuse that does not throw, such as a missing `PreserveContents` or a drop target
 without its states ([architecture](https://github.com/ponttorez/molib/blob/master/adr/foundation/architecture.md)).
 
+### Lifetime and threads
+
+- `Dispose` finishes whatever is running instead of freezing it: animations jump to their end, open layers and toasts
+  close, a drag ends, Gum's settings that molib changed come back, and molib's handlers leave your elements. After it
+  you may create a new `MolibService`.
+- When a screen goes away but its elements live on, take molib off them: `LongPress.Detach()`,
+  `ScrollInertia.Detach()`, `molib.Sound.Detach(screen)`, `molib.DragDrop.Remove(element)`.
+- Use molib from the game thread only. Events and task continuations run there, inside `MolibService.Update`.
+- Details: [architecture](https://github.com/ponttorez/molib/blob/master/adr/foundation/architecture.md), sections
+  «Disposal» and «Threads».
+
 ### Text beyond Latin
 
 Gum's built-in font has Latin letters only. For Cyrillic or other scripts, rasterize a TTF with KernSmith

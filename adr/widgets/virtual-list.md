@@ -67,14 +67,14 @@ list.UseInertia(molib);
 - `BindVisual` — fills a visual with the row's data; called when a row appears and when it is reused. Not set — the row
   shows the item text (`ListBoxItem.UpdateToObject`). Set after `Items`, it refills the rows already visible.
 - `ItemHeight` — the row height in canvas units, 40 by default. `Columns > 1` — a grid: a row holds `Columns` cells,
-  and the cell width is the list width divided by `Columns`. A non-positive height or fewer than one column throws
-  `ArgumentOutOfRangeException`.
+  and the cell width is the list width divided by `Columns`. A height that is not a positive finite number or fewer
+  than one column throws `ArgumentOutOfRangeException`.
 - `SelectedIndex` (-1 — nothing), `SelectedItem`, the `SelectionChanged` event — on a selection by the player, by code
   and when the selected item is removed. A `SelectedIndex` set from code does not scroll the list.
 - The `ItemActivated` event with the item — a click or touch on a row, `A`, Enter, Space; an activated item is always
   selected.
 - `ScrollToIndex(index, ScrollAlign.Nearest | Start | Center | End)`; `Nearest` does not move a row that is fully
-  visible.
+  visible. An `align` outside its named values throws `ArgumentOutOfRangeException`.
 
 ## Structure
 

@@ -128,3 +128,6 @@ Registrations are walked once per drag, when it starts.
   reordering is the same drag: the elements are registered as both sources and targets, and the game's `drop` does the
   reordering. There is no animation of neighbours moving apart.
 - Dragging between OS windows and dropping files into the game — not done.
+- Disposing the service ends a drag without `Cancelled`: the source gets its own look back, the target its `None`
+  state, the copy leaves the tree, and the registrations are cleared
+  ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).

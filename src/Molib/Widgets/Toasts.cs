@@ -74,9 +74,11 @@ public sealed class Toasts
     /// <param name="text">The message.</param>
     /// <param name="options">How to show it; defaults when omitted.</param>
     /// <returns>The toast, to dismiss it early.</returns>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public ToastHandle Show(string text, ToastOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(text);
+        _molib.Lifetime.ThrowIfDisposed();
         GraphicalUiElement content = DefaultVisualFactory?.Invoke(text) ?? CreateDefaultVisual(text);
         return Show(content, options);
     }
@@ -89,9 +91,11 @@ public sealed class Toasts
     /// <param name="options">How to show it; defaults when omitted.</param>
     /// <returns>The toast, to dismiss it early.</returns>
     /// <exception cref="InvalidOperationException"><paramref name="content"/> is already in an open toast.</exception>
+    /// <exception cref="ObjectDisposedException">The service is disposed.</exception>
     public ToastHandle Show(GraphicalUiElement content, ToastOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(content);
+        _molib.Lifetime.ThrowIfDisposed();
         for (int i = 0; i < PlacementCount; i++)
         {
             if (Contains(_visible[i], content) || Contains(_waiting[i], content))
@@ -135,6 +139,50 @@ public sealed class Toasts
                 BeginHide(toast);
                 break;
         }
+    }
+
+    /// <summary>
+    /// Takes every toast away at once, shown or waiting, and the toast container out of <c>PopupRoot</c>; the service
+    /// is being disposed.
+    /// </summary>
+    /// <remarks>
+    /// The motion core has already finished the running show and hide animations, so the content has its own look
+    /// back. Each content element leaves its slot visible and without a parent, as after a normal hide, and every
+    /// handle reports <see cref="ToastHandle.IsOpen"/> as <see langword="false"/>.
+    /// ADR: widgets/toasts — Placement and queue; foundation/architecture — Disposal.
+    /// </remarks>
+    internal void Shutdown()
+    {
+        for (int i = 0; i < PlacementCount; i++)
+        {
+            foreach (ToastHandle waiting in _waiting[i])
+            {
+                waiting.State = ToastState.Closed;
+            }
+
+            _waiting[i].Clear();
+            _visible[i].Clear();
+        }
+
+        for (int i = 0; i < _active.Count; i++)
+        {
+            ToastHandle toast = _active[i];
+            toast.State = ToastState.Closed;
+            toast.Content.SizeChanged -= toast.SizeChangedHandler;
+            toast.Slot.RemoveFromRoot();
+            toast.Content.RemoveFromRoot();
+            toast.Content.Visible = true;
+        }
+
+        _active.Clear();
+        _host?.RemoveFromRoot();
+        if (_safeContainer is not null)
+        {
+            _ = _molib.SafeArea.Detach(_safeContainer);
+        }
+
+        _host = null;
+        _safeContainer = null;
     }
 
     /// <summary>

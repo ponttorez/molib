@@ -1,5 +1,3 @@
-using System.Globalization;
-
 namespace Molib.Interaction;
 
 /// <summary>
@@ -16,28 +14,27 @@ public sealed class InertiaOptions
     public float Friction
     {
         get;
-        init
-        {
-            if (!float.IsFinite(value) || value <= 0)
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(value),
-                    value,
-                    string.Create(CultureInfo.InvariantCulture, $"Friction must be a positive number; got {value}."));
-            }
-
-            field = value;
-        }
+        init => field = Guard.Positive(value, nameof(Friction));
     } = 4f;
 
     /// <summary>
     /// Where the content comes to rest; <see cref="ScrollSnap.None"/> by default.
     /// </summary>
-    public ScrollSnap Snap { get; init; }
+    /// <exception cref="ArgumentOutOfRangeException">The value is not a named <see cref="ScrollSnap"/>.</exception>
+    public ScrollSnap Snap
+    {
+        get;
+        init => field = Guard.Defined(value, nameof(Snap));
+    }
 
     /// <summary>
     /// Which point of a child meets the same point of the visible area with <see cref="ScrollSnap.Items"/>;
     /// <see cref="SnapAlign.Start"/> by default.
     /// </summary>
-    public SnapAlign SnapAlign { get; init; }
+    /// <exception cref="ArgumentOutOfRangeException">The value is not a named <see cref="SnapAlign"/>.</exception>
+    public SnapAlign SnapAlign
+    {
+        get;
+        init => field = Guard.Defined(value, nameof(SnapAlign));
+    }
 }

@@ -61,13 +61,13 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
     /// <summary>
     /// Height of every row in canvas units; 40 by default.
     /// </summary>
-    /// <exception cref="ArgumentOutOfRangeException">The value is not positive.</exception>
+    /// <exception cref="ArgumentOutOfRangeException">The value is not a positive number.</exception>
     public float ItemHeight
     {
         get;
         set
         {
-            ArgumentOutOfRangeException.ThrowIfNegativeOrZero(value);
+            _ = Guard.Positive(value, nameof(ItemHeight));
             if (value != field)
             {
                 field = value;
@@ -227,10 +227,11 @@ public sealed class VirtualList<T> : ScrollViewer, IVirtualList
     /// </summary>
     /// <param name="index">Index of the item.</param>
     /// <param name="align">Where to put the row.</param>
-    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not the index of an item.
-    /// </exception>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="index"/> is not the index of an item, or
+    /// <paramref name="align"/> is not a named <see cref="ScrollAlign"/>.</exception>
     public void ScrollToIndex(int index, ScrollAlign align = ScrollAlign.Nearest)
     {
+        _ = Guard.Defined(align, nameof(align));
         ArgumentOutOfRangeException.ThrowIfNegative(index);
         ArgumentOutOfRangeException.ThrowIfGreaterThanOrEqual(index, Count);
         float viewport = ClipContainer.AbsoluteHeight;

@@ -39,7 +39,11 @@ public interface ISafeAreaSource
 - `molib.SafeArea.Attach(container)` — the container stretches over its parent minus the insets: `X = left`,
   `Y = top` from the top left corner, width and height `RelativeToParent` with `-(left + right)` and `-(top + bottom)`.
   When the insets change, molib updates these values itself. A second `Attach` of the same container does nothing;
-  `Detach(container)` stops updating it.
+  `Detach(container)` stops updating it. molib holds the containers by weak references: a screen the game throws away
+  without `Detach` is not kept alive.
+- Disposing the service leaves the source's event and forgets the containers; they keep their last insets, so the
+  content does not jump under the cutout ([foundation/architecture.md](../foundation/architecture.md), section
+  «Disposal»).
 - Usually one root container of the screen is made safe. Modal windows and toasts shown by molib put their content into
   the safe area automatically, and the scrim over the whole screen.
 

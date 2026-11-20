@@ -36,8 +36,11 @@ button.Click += (_, _) =>
   `LongPress`: the `Triggered` event, the `ConsumedClick` flag, `Element`, `Options`.
 - A second call for the same element is a programmer error (`InvalidOperationException`). The registration lives in a
   weak table and does not hold the element.
-- It starts on the element's `Push`. The duration is 0.5 s (`LongPressOptions.Duration`, a positive number), in real
-  time: `TimeScale` does not affect it.
+- `LongPress.Detach()` takes the handlers off the element; after it the element may get a new long press. A second
+  `Detach` does nothing; disposing the service detaches every long press
+  ([foundation/architecture.md](../foundation/architecture.md), section «Detaching from elements»).
+- It starts on the element's `Push`. The duration is 0.5 s (`LongPressOptions.Duration`, a positive finite number),
+  in real time: `TimeScale` does not affect it.
 - Cancelled by:
   - `LosePush` — release or the pointer leaving the element;
   - the pointer moving more than 10 canvas units from the press point;

@@ -22,7 +22,8 @@ var quick = MotionPreset.Tween(0.2f, InterpolationType.Quadratic, Easing.Out);
   «Scrolling»). The animations themselves are internal molib objects: the game gets them through state transitions
   ([state-transitions.md](state-transitions.md)) and `ShowAsync` / `HideAsync` ([show-hide.md](show-hide.md)).
 - `MotionPreset` is immutable: a preset is created once and reused. A wrong parameter (`Stiffness` and `DampingRatio`
-  not above 0, `Duration` not above 0, not a number) is a programmer error, `ArgumentOutOfRangeException`.
+  not above 0, `Duration` not above 0, not a finite number, or a Gum `InterpolationType` or `Easing` outside its named
+  values) is a programmer error, `ArgumentOutOfRangeException`.
 
 ## Progress
 
@@ -32,6 +33,9 @@ var quick = MotionPreset.Tween(0.2f, InterpolationType.Quadratic, Easing.Out);
   from the next frame. The `ShowAsync` / `HideAsync` tasks complete there too — on the game thread inside
   `MolibService.Update`.
 - An empty list — `Update` does nothing.
+- When the service is disposed, the core finishes every running animation at once — the progress jumps to 1 and the
+  owners complete as usual — and from then on a started animation completes in the call
+  ([foundation/architecture.md](../foundation/architecture.md), section «Disposal»).
 - Animations are reusable objects of their owner: nothing is created in a frame.
 
 ## Without animation
