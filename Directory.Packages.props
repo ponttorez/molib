@@ -1,0 +1,21 @@
+<Project>
+  <!-- Central package management: every version lives here and nowhere else. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+
+  <ItemGroup Label="Runtime">
+    <PackageVersion Include="MonoGame.Framework.DesktopGL" Version="3.8.6.1" />
+    <PackageVersion Include="Gum.MonoGame" Version="2026.11.2.1" />
+  </ItemGroup>
+
+  <ItemGroup Label="Build time only">
+    <PackageVersion Include="MinVer" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup Label="Analyzers (build time only, applied to every project)">
+    <GlobalPackageReference Include="Roslynator.Analyzers" Version="5.0.1" />
+    <GlobalPackageReference Include="Microsoft.CodeAnalysis.BannedApiAnalyzers" Version="5.0.0" />
+  </ItemGroup>
+</Project>

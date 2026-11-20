@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Molib</RootNamespace>
+    <PackageId>Molib</PackageId>
+    <Description>Extensions for Gum UI on MonoGame: motion, layers, scrolling, scaling.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/ponttorez/molib</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/ponttorez/molib.git</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <EnablePackageValidation>true</EnablePackageValidation>
+    <!-- Version comes from the git tag (v1.2.3); untagged builds get a pre-release version. -->
+    <MinVerTagPrefix>v</MinVerTagPrefix>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="../../README.md" Pack="true" PackagePath="/" />
+    <PackageReference Include="MinVer" PrivateAssets="All" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Gum.MonoGame" />
+    <!-- Compile-time only: the game brings its own MonoGame.Framework.* for its platform. -->
+    <PackageReference Include="MonoGame.Framework.DesktopGL" PrivateAssets="All" />
+  </ItemGroup>
+</Project>
